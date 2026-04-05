@@ -1,0 +1,12 @@
+# Exclude dev/deployment artifacts from ClawHub bundle
+agents/
+.claude-plugin/
+.claude/
+.git/
+.github/
+sync.sh
+LICENSE
+README.md
+*.log
+.DS_Store
+__pycache__/

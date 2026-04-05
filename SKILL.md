@@ -1,0 +1,92 @@
+---
+name: hum
+description: Content writing and feed intelligence skill. Use when: (1) running the daily loop, (2) refreshing the daily news feed, (3) brainstorming topic ideas for posts, (4) drafting channel-specific posts, threads, or scripts, (5) managing the idea pipeline, (6) improving content strategy, (7) responding to comments on posts, (8) managing feed sources and preferences. Triggers: "hum loop", "daily loop", "morning loop", "write a post", "brainstorm topics", "draft something about X", "content ideas", "LinkedIn post", "X thread", "topic ideas", "respond to comments", "reply to comments", "check comments", "refresh feed", "morning digest", "run newsfeed", "Twitter digest", "add source", "remove source".
+---
+
+# Hum
+
+Ghostwrites social content — from feed intelligence through topic ideation to final draft and publishing.
+
+## How It Works
+
+1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md) and folders
+3. **Refresh feed** — `/hum refresh-feed` crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC; ranks items; sends a digest to Telegram; saves aggregated data to `feeds.json`
+4. **Manage sources** — `/hum sources` adds, removes, and lists feed sources
+5. **Brainstorm** — `/hum brainstorm` researches each content pillar across YouTube, X, Reddit, Hacker News, Polymarket, and web, then saves ideas to `ideas.json`
+6. **Learn** — `/hum learn` analyzes feed trends and platform algorithms, updates context files
+7. **Manage ideas** — `/hum ideas` shows the pipeline (pending → approved → drafted → published)
+8. **Review drafts** — `/hum content` lists current saved draft files and generated assets
+9. **Draft posts** — `/hum create` researches topic, proposes outline for approval, then writes in the user's voice
+10. **Refine** — iterate on drafts until approved, then save
+11. **Publish** — `/hum publish` posts approved drafts to LinkedIn or X via API scripts
+12. **Engage** — `/hum engage` handles follow suggestions, outbound engagement plays, and replies/comments
+
+## Configuration
+
+The skill stores all data in a configurable directory. Set the `HUM_DATA_DIR` environment variable:
+
+```bash
+export HUM_DATA_DIR=~/Documents/hum
+```
+
+If not set, defaults to `~/Documents/hum`. When running inside OpenClaw, it also reads from `openclaw.json` → `skills.entries.hum.config.data_dir`.
+
+## Data Directory Structure
+
+All user-owned data lives in `<data_dir>`:
+
+| Path | Purpose |
+|------|---------|
+| `<data_dir>/VOICE.md` | Voice, tone, and writing guidelines |
+| `<data_dir>/AUDIENCE.md` | Target audience definition |
+| `<data_dir>/CHANNELS.md` | Publishing platforms and rules |
+| `<data_dir>/CONTENT.md` | Content pillars with keywords for feed classification |
+| `<data_dir>/ideas/ideas.json` | Brainstormed content ideas and brainstorm config |
+| `<data_dir>/content/` | Generated drafts, images, diagrams, videos |
+| `<data_dir>/content-samples/` | Real posts from the user's social media — primary voice reference |
+| `<data_dir>/knowledge/` | User-curated reference material (articles, notes, research) |
+| `<data_dir>/feed/feeds.json` | Aggregated feed — single source of truth for brainstorming |
+| `<data_dir>/feed/raw/` | Per-source JSON crawl outputs |
+| `<data_dir>/feed/sources.json` | Feed sources (X accounts, YouTube creators, websites) |
+| `<data_dir>/feed/assets/` | Preference learning (rankings, feedback history, dedup tracker) |
+
+## Writing Guidelines
+
+- **Always read `content-samples/`** before drafting — these are real examples of the user's writing and the most authoritative reference for their voice.
+- **Always read `knowledge/`** before drafting — any reference material the user has placed there should inform the content.
+- **Always read `VOICE.md`** for tone and style rules.
+
+## Post Types
+
+Each post type has a defined structure. The `/hum create` command requires a platform and post type.
+
+### X
+| Post Type | Format |
+|-----------|--------|
+| **Tweet** | Single tweet, under 280 chars, hook-driven. Optional media. |
+| **Thread** | Multiple numbered tweets, each under 280 chars. Hook in tweet 1. |
+
+### LinkedIn
+| Post Type | Format |
+|-----------|--------|
+| **Post** | Under 200 words. Short paragraphs. Opens with observation, ends with reflection/question. |
+| **Article** | Long-form, 600–1000 words. Section headers. Requires cover image and intro feed post. |
+
+## Actions & Connectors
+
+Actions live in `scripts/act/`, connectors in `scripts/act/connectors/` (one per channel):
+
+- **Connectors** (`act/connectors/`):
+  - `x.py` — X API v2 (requires `credentials/x.json` or `X_USER_ACCESS_TOKEN` env var)
+  - `linkedin.py` — LinkedIn REST API (requires `credentials/linkedin.json` or env vars)
+  - All connectors follow a uniform interface — see `act/connectors/__init__.py` for the `load(platform)` dispatcher
+- **Actions** (`act/`):
+  - `publish.py` — draft parsing, preview, and publishing via connectors
+  - `engage.py` — follows, comments, replies
+  - `analyze.py` — account insights and post analytics
+- Browser-based actions (when API is unavailable) are handled by the agent via the browser tool.
+- Never put secrets in the skill files. Read them from `credentials/x.json`, `credentials/linkedin.json`, or env vars.
+
+## Daily Loop
+
+`/hum loop` runs the full morning workflow. See `LOOP.md` for the step-by-step instructions. Individual steps call scripts from `scripts/` where needed.

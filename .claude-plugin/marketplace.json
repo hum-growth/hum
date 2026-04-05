@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hum-skill",
+  "description": "Content writing and feed intelligence skill for LinkedIn and X.",
+  "plugins": [
+    {
+      "name": "hum",
+      "description": "AI content writer — from feed intelligence through topic ideation to final draft and publishing.",
+      "version": "1.0.0",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "hum",
+  "version": "1.0.0",
+  "description": "Content writing and feed intelligence skill for LinkedIn and X. Brainstorm topics, research trends, write posts in your voice, and publish them.",
+  "license": "MIT",
+  "keywords": [
+    "claude-skill",
+    "claude-code",
+    "content-creation",
+    "ghostwriting",
+    "linkedin",
+    "twitter",
+    "social-media",
+    "writing",
+    "feed-intelligence"
+  ],
+  "skills": ["./"],
+  "hooks": {}
+}

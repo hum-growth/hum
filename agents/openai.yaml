@@ -1,0 +1,8 @@
+interface:
+  display_name: "Hum"
+  short_description: "Content writing and feed intelligence skill for LinkedIn and X. Brainstorm topics, research trends, write posts in your voice, and publish them."
+  default_prompt: "Help me brainstorm content ideas and draft posts for my social media profiles. Use my voice guidelines and audience context."
+  brand_color: "#1A1A2E"
+
+policy:
+  allow_implicit_invocation: true
