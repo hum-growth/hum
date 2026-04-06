@@ -35,9 +35,114 @@ def analyze_account(
     """Gather account-level insights for a platform.
 
     Returns dict with engagement metrics, follower stats, and recent post performance.
+    For X and LinkedIn (which require JS rendering), returns a result with
+    needs_browser=True and browser instructions for the agent to execute.
     """
     connector = load_connector(platform)
-    return connector.get_stats(account)
+    result = connector.get_stats(account)
+
+    if isinstance(result, dict) and result.get("needs_browser"):
+        platform_name = result["platform"]
+        profile_url = result["profile_url"]
+        instructions = _get_browser_instructions(platform_name, profile_url)
+        return {
+            "needs_browser": True,
+            "platform": platform_name,
+            "account": account,
+            "profile_url": profile_url,
+            "instructions": instructions,
+        }
+
+    return result
+
+
+def _get_browser_instructions(platform: str, profile_url: str) -> dict:
+    """Return browser scraping instructions for a given platform."""
+    if platform == "x":
+        return {
+            "action": "scrape_x_profile",
+            "url": profile_url,
+            "steps": [
+                f"Navigate to {profile_url}",
+                "Wait for the page to fully load (2-3 seconds)",
+                "Extract from the profile header:",
+                "  - Follower count",
+                "  - Following count",
+                "  - Post count",
+                "  - Profile description/bio",
+                "Scroll down and extract up to 10 recent posts, for each:",
+                "  - Post text (first 200 chars)",
+                "  - Posted date/relative time",
+                "  - Like count",
+                "  - Repost count",
+                "  - Reply count",
+                "  - View count (if shown)",
+                "  - Post URL",
+            ],
+            "output_schema": {
+                "profile": {
+                    "followers": "integer",
+                    "following": "integer",
+                    "posts": "integer",
+                    "bio": "string",
+                },
+                "recent_posts": [
+                    {
+                        "type": "original | repost",
+                        "original_author": "string (only if repost, e.g. '@jackzhang')",
+                        "text": "string (first 200 chars)",
+                        "date": "string (relative date)",
+                        "likes": "integer",
+                        "retweets": "integer",
+                        "replies": "integer",
+                        "views": "integer (if available)",
+                        "url": "string",
+                    }
+                ],
+            },
+        }
+    elif platform == "linkedin":
+        return {
+            "action": "scrape_linkedin_profile",
+            "url": profile_url,
+            "steps": [
+                f"Navigate to {profile_url}",
+                "Wait for the page to fully load (3-4 seconds)",
+                "Extract the following data from the profile:",
+                "  - Profile views (number)",
+                "  - Post impressions in past 7 days (number)",
+                "  - Search appearances (number)",
+                "  - Follower count",
+                "  - Connection count",
+                "Scroll down and extract up to 10 recent posts, for each:",
+                "  - Post type: 'original' or 'repost'",
+                "  - If repost: original author's name (e.g. 'Jack Zhang')",
+                "  - Post text (first 150 chars, or description for link/video posts)",
+                "  - Reaction count",
+                "  - Comment count",
+                "  - Repost count",
+                "  - Date posted",
+            ],
+            "output_schema": {
+                "profile_views": "integer",
+                "post_impressions_7d": "integer",
+                "search_appearances": "integer",
+                "followers": "integer",
+                "connections": "integer",
+                "recent_posts": [
+                    {
+                        "type": "original | repost",
+                        "original_author": "string (only if repost, e.g. '@jackzhang')",
+                        "text": "string (first 150 chars)",
+                        "reactions": "integer",
+                        "comments": "integer",
+                        "reposts": "integer",
+                        "date": "string",
+                    }
+                ],
+            },
+        }
+    return {}
 
 
 def analyze_post(

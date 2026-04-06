@@ -16,38 +16,57 @@ DEFAULT_DATA_DIR = Path.home() / "Documents" / "hum"
 
 
 def _find_openclaw_json() -> Path | None:
-    """Look for openclaw.json in parent directories (works inside OpenClaw)."""
+    """Look for openclaw.json in parent directories and ~/.openclaw/."""
+    # Walk up from script location (may be symlinked)
     candidate = Path(__file__).resolve().parent.parent
     for _ in range(6):
         candidate = candidate.parent
         oc = candidate / "openclaw.json"
         if oc.exists():
             return oc
+    # Fallback: check ~/.openclaw/ directly
+    home_oc = Path.home() / ".openclaw" / "openclaw.json"
+    if home_oc.exists():
+        return home_oc
     return None
 
 
 def load_config() -> dict:
     """Load hum config with env var → openclaw.json → default fallback."""
-    # 1. Env var takes priority
+    oc_path = _find_openclaw_json()
+    oc_data = {}
+    if oc_path:
+        try:
+            with open(oc_path) as f:
+                oc_data = json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # 1. Env var takes priority for data_dir
     env_dir = os.environ.get("HUM_DATA_DIR")
     if env_dir:
         data_dir = Path(os.path.expanduser(env_dir))
     else:
         # 2. Try openclaw.json
         data_dir = DEFAULT_DATA_DIR
-        oc_path = _find_openclaw_json()
-        if oc_path:
-            try:
-                with open(oc_path) as f:
-                    oc = json.load(f)
-                raw = oc.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("data_dir")
-                if raw:
-                    data_dir = Path(os.path.expanduser(raw))
-            except (json.JSONDecodeError, KeyError):
-                pass
+        raw = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("data_dir")
+        if raw:
+            data_dir = Path(os.path.expanduser(raw))
+
+    # Image model: env var → openclaw.json → default
+    image_model = os.environ.get("IMAGE_MODEL")
+    if not image_model:
+        image_model = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("image_model")
+    image_model = image_model or "gemini"
+
+    # Load API keys: env var → openclaw.json env.vars
+    scrapecreators_key = os.environ.get("SCRAPECREATORS_API_KEY")
+    if not scrapecreators_key:
+        scrapecreators_key = oc_data.get("env", {}).get("vars", {}).get("SCRAPECREATORS_API_KEY")
 
     return {
         "data_dir": data_dir,
+        "image_model": image_model,
         "feed_dir": data_dir / "feed",
         "feeds_file": data_dir / "feed" / "feeds.json",
         "feed_raw": data_dir / "feed" / "raw",
@@ -57,7 +76,40 @@ def load_config() -> dict:
         "content_samples_dir": data_dir / "content-samples",
         "ideas_dir": data_dir / "ideas",
         "content_dir": data_dir / "content",
+        "scrapecreators_api_key": scrapecreators_key,
     }
+
+
+def load_visual_style(data_dir: Path | None = None) -> str | None:
+    """Parse VOICE.md for the '## Visual Style' section.
+
+    Returns the section content as a string, or None if absent/empty.
+    """
+    if data_dir is None:
+        data_dir = load_config()["data_dir"]
+
+    voice_md = data_dir / "VOICE.md"
+    if not voice_md.exists():
+        return None
+
+    lines: list[str] = []
+    in_section = False
+
+    with voice_md.open(encoding="utf-8") as f:
+        for line in f:
+            stripped = line.rstrip("\n")
+            if re.match(r"^##\s+Visual Style", stripped):
+                in_section = True
+                continue
+            if in_section:
+                if re.match(r"^##\s+", stripped):
+                    break
+                lines.append(stripped)
+
+    text = "\n".join(lines).strip()
+    # Strip HTML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).strip()
+    return text or None
 
 
 def load_topics(data_dir: Path | None = None) -> dict[str, list[str]]:
@@ -106,8 +158,12 @@ def load_topics(data_dir: Path | None = None) -> dict[str, list[str]]:
 if __name__ == "__main__":
     cfg = load_config()
     for k, v in cfg.items():
-        exists = "✓" if Path(v).exists() else "✗"
-        print(f"  {exists} {k}: {v}")
+        if isinstance(v, Path):
+            exists = "✓" if v.exists() else "✗"
+            print(f"  {exists} {k}: {v}")
+        else:
+            val = f"{v[:4]}..." if isinstance(v, str) and len(v) > 8 else v
+            print(f"    {k}: {val}")
 
     topics = load_topics(cfg["data_dir"])
     print(f"\n  Topics ({len(topics)} pillars):")

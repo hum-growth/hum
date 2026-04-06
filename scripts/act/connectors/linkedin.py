@@ -278,8 +278,89 @@ def get_stats(
     account: str,
     post_url: str | None = None,
 ) -> dict[str, Any]:
-    """Get engagement stats for a LinkedIn account or post. Not yet implemented."""
-    raise NotImplementedError("LinkedIn stats not yet implemented")
+    """Get engagement stats for a LinkedIn account or post.
+
+    LinkedIn is JavaScript-rendered — no API key needed for public data.
+    Falls back to browser-based extraction for profile and post stats.
+    """
+    if _api_available(account):
+        raise NotImplementedError("LinkedIn API does not support stats retrieval yet")
+
+    creds = load_credentials(account)
+    profile_url = creds.get("profile_url", f"https://www.linkedin.com/in/{account}/")
+    return _browser_stats(profile_url, account)
+
+
+def _browser_stats(profile_url: str, account: str) -> dict[str, Any]:
+    """Return browser scraping instructions for LinkedIn profile stats.
+
+    LinkedIn requires JavaScript rendering, so we return instructions
+    for the agent to execute via browser tool. The agent passes the
+    extracted data back by calling format_browser_stats().
+    """
+    return {
+        "needs_browser": True,
+        "platform": "linkedin",
+        "account": account,
+        "instructions": {
+            "action": "scrape_linkedin_profile",
+            "steps": [
+                f"Navigate to {profile_url}",
+                "Wait for the page to fully load (3-4 seconds)",
+                "Extract the following data from the profile:",
+                "  - Profile views (number)",
+                "  - Post impressions in past 7 days (number)",
+                "  - Search appearances (number)",
+                "  - Follower count",
+                "  - Connection count",
+                "Scroll down and extract up to 10 recent posts, for each:",
+                "  - Post type: 'original' or 'repost'",
+                "  - If repost: original author's name (e.g. 'Jack Zhang')",
+                "  - Post text preview (first 150 chars or description for link/video posts)",
+                "  - Reaction count",
+                "  - Comment count",
+                "  - Repost count",
+                "  - Date posted",
+            ],
+            "output_schema": {
+                "profile_views": "integer",
+                "post_impressions_7d": "integer",
+                "search_appearances": "integer",
+                "followers": "integer",
+                "connections": "integer",
+                "recent_posts": [
+                    {
+                        "text": "first 150 chars of post text",
+                        "reactions": "integer",
+                        "comments": "integer",
+                        "reposts": "integer",
+                        "date": "relative date string (e.g. '2w')",
+                        "url": "post URL if available",
+                    }
+                ],
+            },
+            "note": "All data is publicly visible on the profile page — no login required to view.",
+        },
+        "profile_url": profile_url,
+    }
+
+
+def format_browser_stats(data: dict, account: str) -> dict[str, Any]:
+    """Format browser-extracted LinkedIn data into stats response.
+
+    Called by the agent after executing the browser scraping instructions.
+    """
+    return {
+        "method": "browser",
+        "platform": "linkedin",
+        "account": account,
+        "profile_views": data.get("profile_views", 0),
+        "post_impressions_7d": data.get("post_impressions_7d", 0),
+        "search_appearances": data.get("search_appearances", 0),
+        "followers": data.get("followers", 0),
+        "connections": data.get("connections", 0),
+        "recent_posts": data.get("recent_posts", []),
+    }
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────

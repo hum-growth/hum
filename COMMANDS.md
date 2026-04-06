@@ -177,14 +177,10 @@ Display current configuration:
 ```
 Hum Config
   data_dir: ~/Documents/hum
+  image_model: gemini
 ```
 
-To change, set the `HUM_DATA_DIR` environment variable:
-```bash
-export HUM_DATA_DIR=~/Documents/hum
-```
-
-Or, if running inside OpenClaw, edit `openclaw.json`:
+To change, set environment variables or edit `openclaw.json`:
 ```json
 {
   "skills": {
@@ -192,7 +188,8 @@ Or, if running inside OpenClaw, edit `openclaw.json`:
       "hum": {
         "enabled": true,
         "config": {
-          "data_dir": "~/Documents/hum"
+          "data_dir": "~/Documents/hum",
+          "image_model": "gemini"
         }
       }
     }
@@ -406,6 +403,24 @@ Researches an idea, proposes an outline for approval, then drafts content in the
 
 **Flow:** Load context → Deep research (3-5 web searches) → Propose outline → User approval → Write draft → Save & track
 
+### Image generation
+
+When drafting, set the `image_prompt` field on the post. The `validate()` call automatically generates the image using the configured provider (default: Gemini).
+
+To include an image with a draft:
+- Add `image_prompt: "your image description"` when creating the post
+- `validate(post)` ��� generates image → sets `media_path`
+- `format_preview(post)` → shows `(run validate() to generate the image)` until generated
+- If `VOICE.md` has a `## Visual Style` section, it is appended to the prompt automatically
+
+Providers:
+1. `gemini` — gemini-2.5-flash-image (default)
+2. `openai` — gpt-image-1
+3. `grok` — grok-2-image (xAI API)
+4. `minimax` — image-01
+
+Set the active provider in `openclaw.json` → `skills.entries.hum.config.image_model` or via the `IMAGE_MODEL` env var.
+
 ---
 
 ## /hum publish [draft file or idea ID]
@@ -457,7 +472,7 @@ When publishing a LinkedIn article (long-form, `_Format: LinkedIn Article_` in t
 
 Use an image generation API (Gemini or MiniMax) to create a cover image for the article.
 
-- **API key:** read from `GEMINI_API_KEY` or `MINIMAX_API_KEY` env var
+- **API key:** uses the configured image provider (see `/hum config`)
 - **Prompt:** generate a LinkedIn article cover image for the article title, matching the user's style preferences
 - **Save to:** `<data_dir>/content/LinkedIn Cover - [article title].png`
 - Show the image to the user and ask for approval before proceeding

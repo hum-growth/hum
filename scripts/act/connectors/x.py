@@ -296,8 +296,177 @@ def get_stats(
     account: str,
     post_url: str | None = None,
 ) -> dict[str, Any]:
-    """Get engagement stats for an X account or post. Not yet implemented."""
-    raise NotImplementedError("X stats not yet implemented")
+    """Get engagement stats for an X account or post.
+
+    Tries X API first; falls back to browser-based extraction when no credentials.
+    Since browser access requires the agent's session, this returns a marker
+    telling the caller to invoke browser commands in the main session.
+    """
+    if _api_available(account):
+        raise NotImplementedError("X API does not support stats retrieval yet")
+
+    creds = load_credentials(account)
+    username = creds.get("username", account)
+    return {
+        "needs_browser": True,
+        "platform": "x",
+        "account": username,
+        "profile_url": f"https://x.com/{username.lstrip('@')}",
+    }
+
+
+def _browser_stats(username: str) -> dict[str, Any]:
+    """Scrape X profile stats via HTTP (no browser needed).
+
+    X embeds profile data as JSON in the page HTML. We fetch the page,
+    extract the __INITIAL_STATE__ JSON, and parse out the key metrics.
+    """
+    import re
+
+    url = f"https://x.com/{username.lstrip('@')}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return {
+            "method": "browser",
+            "platform": "x",
+            "account": username,
+            "error": f"Failed to fetch profile: {exc}",
+        }
+
+    # Extract __INITIAL_STATE__ JSON from HTML
+    match = re.search(
+        r'id="__INITIAL_STATE__"\s*>\s*({.*?})\s*</script>',
+        html,
+        re.DOTALL,
+    )
+    if not match:
+        # Fallback: try to extract individual stats via regex
+        return _extract_stats_from_html(html, username)
+
+    try:
+        import json as _json
+
+        state = _json.loads(match.group(1))
+    except Exception:
+        return _extract_stats_from_html(html, username)
+
+    # Navigate to user entity in state
+    users = state.get("users", {})
+    user = users.get(username.lstrip("@"), {})
+    if not user:
+        # Try finding by screen_name
+        for k, v in users.items():
+            if v.get("screen_name", "").lower() == username.lstrip("@").lower():
+                user = v
+                break
+
+    follower_count = user.get("follower_count", 0) or 0
+    following_count = user.get("following_count", 0) or 0
+    statuses_count = user.get("statuses_count", 0) or 0
+
+    # Extract latest tweets from timeline
+    tweets = []
+    timeline = (
+        state.get("featureSwitchTimeline", {})
+        .get("timeline", {})
+        .get("instructions", [{}])
+    )
+    entries = []
+    for instr in timeline:
+        for entry in instr.get("addEntries", {}).get("entries", []):
+            entries.append(entry)
+
+    for entry in entries[:10]:
+        tweet_data = entry.get("content", {}).get("tweet", {})
+        if not tweet_data:
+            # Variant format
+            tweet_data = entry.get("content", {})
+        tweet_id = tweet_data.get("id_str", "")
+        full_text = tweet_data.get("full_text", "") or tweet_data.get("text", "")
+        created_at = tweet_data.get("created_at", "")
+        retweet_count = tweet_data.get("retweet_count", 0) or 0
+        favorite_count = tweet_data.get("favorite_count", 0) or 0
+        reply_count = tweet_data.get("reply_count", 0) or 0
+        view_count = tweet_data.get("views", {}).get("count", 0) or 0
+
+        if full_text:
+            tweets.append({
+                "id": tweet_id,
+                "text": full_text[:200],
+                "created_at": created_at,
+                "retweets": retweet_count,
+                "likes": favorite_count,
+                "replies": reply_count,
+                "views": view_count,
+                "url": f"https://x.com/{username.lstrip('@')}/status/{tweet_id}",
+            })
+
+    return {
+        "method": "browser",
+        "platform": "x",
+        "account": username,
+        "url": url,
+        "profile": {
+            "followers": follower_count,
+            "following": following_count,
+            "posts": statuses_count,
+        },
+        "recent_posts": tweets,
+    }
+
+
+def _extract_stats_from_html(html: str, username: str) -> dict[str, Any]:
+    """Fallback: extract stats from HTML when JSON state is unavailable."""
+    import re
+
+    followers = 0
+    following = 0
+    posts = 0
+
+    fmatch = re.search(r'"follower_count"\s*:\s*(\d+)', html)
+    if fmatch:
+        followers = int(fmatch.group(1))
+
+    fimatch = re.search(r'"following_count"\s*:\s*(\d+)', html)
+    if fimatch:
+        following = int(fimatch.group(1))
+
+    pmatch = re.search(r'"statuses_count"\s*:\s*(\d+)', html)
+    if pmatch:
+        posts = int(pmatch.group(1))
+
+    # Try alternate HTML patterns
+    if not followers:
+        m = re.search(r'([\d,]+)\s+Followers', html)
+        if m:
+            followers = int(m.group(1).replace(",", ""))
+
+    return {
+        "method": "browser",
+        "platform": "x",
+        "account": username,
+        "profile": {
+            "followers": followers,
+            "following": following,
+            "posts": posts,
+        },
+        "recent_posts": [],
+        "note": "Limited data extracted from HTML",
+    }
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────

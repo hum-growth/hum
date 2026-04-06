@@ -48,6 +48,10 @@ How you want your content to sound. Fill this in with your writing style, tone, 
 
 ## Words to use
 <!-- e.g. specific jargon, brand terms, named concepts -->
+
+## Visual Style
+<!-- Optional. Hum appends this to image generation prompts to match your brand. -->
+<!-- e.g. "Clean minimal style, muted navy/white palette, flat illustration, no text overlays" -->
 """,
     "CONTENT.md": """\
 # Content Pillars
@@ -127,7 +131,7 @@ Where you publish and at what frequency. Only active channels should be listed h
 
 JSON_FILES = {
     "feed/feeds.json": [],
-    "feed/sources.json": {"x_accounts": [], "youtube_creators": [], "websites": []},
+    "feed/sources.json": {"feed_sources": []},
     "ideas/ideas.json": {"primary_keywords": [], "secondary_keywords": [], "intersection_bonus": 0, "label": "Hum", "ideas": []},
 }
 

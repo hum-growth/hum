@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-sources.py — Manage feed sources (X accounts, YouTube creators, websites).
+sources.py — Manage feed sources (X profiles, LinkedIn profiles, YouTube, websites).
 
 Usage:
-    python3 sources.py list
+    python3 sources.py list [--type x_profile|linkedin_profile|youtube|website]
     python3 sources.py add x <handle> [category]
+    python3 sources.py add linkedin <url> [name]
     python3 sources.py add youtube <url> [name]
     python3 sources.py add website <name> <url>
-    python3 sources.py remove <handle_or_name>
+    python3 sources.py remove <handle_or_name_or_url>
 """
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
@@ -19,61 +21,128 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 
+SOURCE_TYPES = ("x_browser", "x_profile", "linkedin_profile", "youtube", "website")
+
 
 def load_sources(path: Path) -> dict:
     if path.exists():
         with open(path) as f:
-            return json.load(f)
-    return {"x_accounts": [], "youtube_creators": [], "websites": []}
+            data = json.load(f)
+        # Handle legacy format
+        if "feed_sources" not in data:
+            return {"feed_sources": []}
+        return data
+    return {"feed_sources": []}
 
 
 def save_sources(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"Saved → {path}")
+    print(f"Saved -> {path}")
 
 
-def cmd_list(sources: dict):
-    print("=== X Accounts ===")
-    for a in sources.get("x_accounts", []):
-        cat = f" [{a['category']}]" if a.get("category") else ""
-        desc = f" — {a['description']}" if a.get("description") else ""
-        print(f"  @{a['handle']}{cat}{desc}")
-    print(f"  ({len(sources.get('x_accounts', []))} total)\n")
-
-    print("=== YouTube Creators ===")
-    for c in sources.get("youtube_creators", []):
-        print(f"  {c.get('name', '?')} — {c['url']}")
-    print(f"  ({len(sources.get('youtube_creators', []))} total)\n")
-
-    print("=== Websites ===")
-    for w in sources.get("websites", []):
-        print(f"  {w['name']} — {w['url']}")
-    print(f"  ({len(sources.get('websites', []))} total)")
+def get_by_type(sources: dict, source_type: str) -> list:
+    return [s for s in sources["feed_sources"] if s["type"] == source_type]
 
 
-def cmd_add(sources: dict, args):
+def update_last_crawled(sources: dict, source_type: str, identifier: str, timestamp: str | None = None):
+    """Update last_crawled for a specific source. identifier is handle or url."""
+    ts = timestamp or datetime.utcnow().isoformat() + "Z"
+    for s in sources["feed_sources"]:
+        if s["type"] != source_type:
+            continue
+        if source_type == "x_profile" and s.get("handle", "").lower() == identifier.lower():
+            s["last_crawled"] = ts
+        elif source_type == "linkedin_profile" and s.get("url", "").rstrip("/").lower() == identifier.rstrip("/").lower():
+            s["last_crawled"] = ts
+        elif source_type == "youtube" and s.get("url", "").lower() == identifier.lower():
+            s["last_crawled"] = ts
+        elif source_type == "x_browser":
+            s["last_crawled"] = ts
+
+
+def cmd_list(sources: dict, filter_type: str | None = None):
+    types_to_show = [filter_type] if filter_type else list(SOURCE_TYPES)
+
+    for st in types_to_show:
+        items = get_by_type(sources, st)
+        if not items:
+            continue
+        label = st.replace("_", " ").title()
+        print(f"=== {label} ({len(items)}) ===")
+        for s in items:
+            crawled = f" [crawled: {s['last_crawled']}]" if s.get("last_crawled") else " [never crawled]"
+            if st == "x_browser":
+                print(f"  {s.get('description', 'X home feed')}{crawled}")
+            elif st == "x_profile":
+                cat = f" [{s['category']}]" if s.get("category") else ""
+                desc = f" -- {s['description']}" if s.get("description") else ""
+                print(f"  @{s['handle']}{cat}{desc}{crawled}")
+            elif st == "linkedin_profile":
+                name = s.get("name", "")
+                desc = f" -- {s['description']}" if s.get("description") else ""
+                print(f"  {name} ({s['url']}){desc}{crawled}")
+            elif st == "youtube":
+                print(f"  {s.get('name', '?')} -- {s['url']}{crawled}")
+            elif st == "website":
+                print(f"  {s['name']} -- {s['url']}")
+        print()
+
+
+def cmd_add(sources: dict, args) -> bool:
     if args.source_type == "x":
         handle = args.value.lstrip("@")
-        if any(a["handle"] == handle for a in sources["x_accounts"]):
+        existing = get_by_type(sources, "x_profile")
+        if any(s["handle"].lower() == handle.lower() for s in existing):
             print(f"@{handle} already exists.")
             return False
-        entry = {"handle": handle}
-        if args.extra:
-            entry["category"] = " ".join(args.extra)
-        sources["x_accounts"].append(entry)
-        print(f"Added @{handle}")
+        entry = {
+            "type": "x_profile",
+            "handle": handle,
+            "category": " ".join(args.extra) if args.extra else "",
+            "description": "",
+            "last_crawled": None,
+        }
+        sources["feed_sources"].append(entry)
+        print(f"Added x_profile: @{handle}")
+        return True
+
+    elif args.source_type == "linkedin":
+        url = args.value.rstrip("/")
+        existing = get_by_type(sources, "linkedin_profile")
+        if any(s["url"].rstrip("/").lower() == url.lower() for s in existing):
+            print(f"{url} already exists.")
+            return False
+        name = " ".join(args.extra) if args.extra else url.split("/in/")[-1].rstrip("/")
+        entry = {
+            "type": "linkedin_profile",
+            "url": url,
+            "name": name,
+            "category": "",
+            "description": "",
+            "last_crawled": None,
+        }
+        sources["feed_sources"].append(entry)
+        print(f"Added linkedin_profile: {name} ({url})")
         return True
 
     elif args.source_type == "youtube":
         url = args.value
-        if any(c["url"] == url for c in sources["youtube_creators"]):
+        existing = get_by_type(sources, "youtube")
+        if any(s["url"].lower() == url.lower() for s in existing):
             print(f"{url} already exists.")
             return False
         name = " ".join(args.extra) if args.extra else url.split("@")[-1] if "@" in url else url
-        sources["youtube_creators"].append({"name": name, "url": url})
-        print(f"Added YouTube: {name}")
+        entry = {
+            "type": "youtube",
+            "name": name,
+            "url": url,
+            "description": "",
+            "last_crawled": None,
+        }
+        sources["feed_sources"].append(entry)
+        print(f"Added youtube: {name}")
         return True
 
     elif args.source_type == "website":
@@ -82,10 +151,17 @@ def cmd_add(sources: dict, args):
             print("Usage: add website <name> <url>")
             return False
         url = args.extra[0]
-        if any(w["name"] == name for w in sources["websites"]):
+        existing = get_by_type(sources, "website")
+        if any(s["name"].lower() == name.lower() for s in existing):
             print(f"{name} already exists.")
             return False
-        sources["websites"].append({"name": name, "url": url})
+        entry = {
+            "type": "website",
+            "name": name,
+            "url": url,
+            "last_crawled": None,
+        }
+        sources["feed_sources"].append(entry)
         print(f"Added website: {name}")
         return True
 
@@ -94,25 +170,29 @@ def cmd_add(sources: dict, args):
         return False
 
 
-def cmd_remove(sources: dict, target: str):
-    target_lower = target.lower().lstrip("@")
+def cmd_remove(sources: dict, target: str) -> bool:
+    target_lower = target.lower().lstrip("@").rstrip("/")
 
-    for i, a in enumerate(sources.get("x_accounts", [])):
-        if a["handle"].lower() == target_lower:
-            sources["x_accounts"].pop(i)
-            print(f"Removed @{a['handle']}")
-            return True
+    for i, s in enumerate(sources["feed_sources"]):
+        match = False
+        if s["type"] == "x_profile" and s.get("handle", "").lower() == target_lower:
+            match = True
+        elif s["type"] == "linkedin_profile" and (
+            s.get("url", "").rstrip("/").lower() == target_lower
+            or s.get("name", "").lower() == target_lower
+        ):
+            match = True
+        elif s["type"] == "youtube" and (
+            s.get("name", "").lower() == target_lower or s.get("url", "").lower() == target_lower
+        ):
+            match = True
+        elif s["type"] == "website" and s.get("name", "").lower() == target_lower:
+            match = True
 
-    for i, c in enumerate(sources.get("youtube_creators", [])):
-        if c.get("name", "").lower() == target_lower or c["url"].lower() == target_lower:
-            sources["youtube_creators"].pop(i)
-            print(f"Removed YouTube: {c.get('name', c['url'])}")
-            return True
-
-    for i, w in enumerate(sources.get("websites", [])):
-        if w["name"].lower() == target_lower:
-            sources["websites"].pop(i)
-            print(f"Removed website: {w['name']}")
+        if match:
+            removed = sources["feed_sources"].pop(i)
+            label = removed.get("handle") or removed.get("name") or removed.get("url")
+            print(f"Removed {removed['type']}: {label}")
             return True
 
     print(f"Not found: {target}")
@@ -123,15 +203,16 @@ def main():
     parser = argparse.ArgumentParser(description="Manage hum feed sources")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("list", help="List all sources")
+    list_p = sub.add_parser("list", help="List all sources")
+    list_p.add_argument("--type", choices=SOURCE_TYPES, default=None, help="Filter by type")
 
     add_p = sub.add_parser("add", help="Add a source")
-    add_p.add_argument("source_type", choices=["x", "youtube", "website"])
+    add_p.add_argument("source_type", choices=["x", "linkedin", "youtube", "website"])
     add_p.add_argument("value", help="Handle, URL, or name")
-    add_p.add_argument("extra", nargs="*", help="Category (x), name (youtube), or URL (website)")
+    add_p.add_argument("extra", nargs="*", help="Category (x), name (linkedin/youtube), or URL (website)")
 
     rm_p = sub.add_parser("remove", help="Remove a source")
-    rm_p.add_argument("target", help="Handle or name to remove")
+    rm_p.add_argument("target", help="Handle, name, or URL to remove")
 
     args = parser.parse_args()
     if not args.command:
@@ -143,7 +224,7 @@ def main():
     sources = load_sources(sources_file)
 
     if args.command == "list":
-        cmd_list(sources)
+        cmd_list(sources, args.type)
     elif args.command == "add":
         if cmd_add(sources, args):
             save_sources(sources_file, sources)

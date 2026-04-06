@@ -13,6 +13,7 @@ Usage (as library):
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field, fields, asdict, MISSING
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ class XTweet:
     post_type: str = field(default="tweet", init=False)
     text: str = ""                    # required, max 280 chars
     media_path: str | None = None     # optional image/video
+    image_prompt: str | None = None   # optional: generate image from this prompt
 
     MAX_TEXT_LENGTH = 280
 
@@ -39,6 +41,7 @@ class XThread:
     post_type: str = field(default="thread", init=False)
     segments: list[str] = field(default_factory=list)  # required, each max 280 chars
     media_path: str | None = None     # optional, attaches to first tweet
+    image_prompt: str | None = None   # optional: generate image from this prompt
 
     MAX_SEGMENT_LENGTH = 280
 
@@ -50,6 +53,7 @@ class LinkedInPost:
     post_type: str = field(default="post", init=False)
     text: str = ""                    # required, ~200 words recommended, max ~3000 chars
     media_path: str | None = None     # optional single image
+    image_prompt: str | None = None   # optional: generate image from this prompt
 
     MAX_TEXT_LENGTH = 3000
     RECOMMENDED_WORDS = 200
@@ -153,6 +157,22 @@ def validate(post) -> list[str]:
     if hasattr(post, "media_path") and post.media_path:
         if not Path(post.media_path).exists():
             errors.append(f"media_path does not exist: {post.media_path}")
+
+    # Auto-generate image if image_prompt is set but media_path is empty
+    if hasattr(post, "image_prompt") and post.image_prompt and not post.media_path:
+        try:
+            # Add scripts/ parent to path so 'scripts' packages are importable
+            import scripts.create.image_gen as img_mod
+            generate_image = img_mod.generate_image
+            platform_name = "x" if post.platform == "x" else "linkedin"
+            path = generate_image(
+                prompt=post.image_prompt,
+                platform=platform_name,
+            )
+            post.media_path = path
+            print(f"[create] Generated image: {path}", file=sys.stderr)
+        except Exception as exc:
+            errors.append(f"image generation failed: {exc}")
 
     if hasattr(post, "cover_image") and post.cover_image:
         if not Path(post.cover_image).exists():
@@ -308,6 +328,9 @@ def format_preview(post) -> str:
 
     if hasattr(post, "media_path") and post.media_path:
         lines.append(f"\nMedia: {post.media_path}")
+    elif hasattr(post, "image_prompt") and post.image_prompt:
+        lines.append(f"\nImage prompt: {post.image_prompt[:80]}{'...' if len(post.image_prompt) > 80 else ''}")
+        lines.append("  (run validate() to generate the image)")
 
     errors = validate(post)
     if errors:

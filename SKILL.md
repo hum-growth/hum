@@ -16,7 +16,13 @@ Ghostwrites social content — from feed intelligence through topic ideation to 
 6. **Learn** — `/hum learn` analyzes feed trends and platform algorithms, updates context files
 7. **Manage ideas** — `/hum ideas` shows the pipeline (pending → approved → drafted → published)
 8. **Review drafts** — `/hum content` lists current saved draft files and generated assets
-9. **Draft posts** — `/hum create` researches topic, proposes outline for approval, then writes in the user's voice
+⚠️ **Always follow the create flow: research → outline → approval → draft. Do not produce a draft without an approved outline.**
+9. **Draft posts** — `/hum create [platform] [type] [idea]` follows a strict 4-step process:
+   - **Step 1 — Load context**: read VOICE.md, CHANNELS.md, content-samples/, knowledge/, the idea from ideas.json
+   - **Step 2 — Research**: 3-5 web searches (core topic, stats, contrarian, examples, adjacents); build a fact base; present findings
+   - **Step 3 — Propose outline**: style selection + hook/angle/structure; **do NOT write prose yet**; get user approval first
+   - **Step 4 — Write**: only after outline is approved; match user's voice from content-samples/; present draft; iterate until approved
+   - ⚠️ **Never skip to drafting without research + outline approval** — the full CREATE.md process is mandatory
 10. **Refine** — iterate on drafts until approved, then save
 11. **Publish** — `/hum publish` posts approved drafts to LinkedIn or X via API scripts
 12. **Engage** — `/hum engage` handles follow suggestions, outbound engagement plays, and replies/comments
@@ -86,6 +92,21 @@ Actions live in `scripts/act/`, connectors in `scripts/act/connectors/` (one per
   - `analyze.py` — account insights and post analytics
 - Browser-based actions (when API is unavailable) are handled by the agent via the browser tool.
 - Never put secrets in the skill files. Read them from `credentials/x.json`, `credentials/linkedin.json`, or env vars.
+
+## Image Generation
+
+Images for posts are generated using the bundled image-gen library at `scripts/lib/image-gen/`. It provides a unified interface to multiple AI image providers:
+
+| Provider | Model | Env Var |
+|----------|-------|---------|
+| **gemini** (default) | gemini-2.5-flash-image | `GEMINI_API_KEY` |
+| **openai** | gpt-image-1 | `OPENAI_API_KEY` |
+| **grok** | grok-2-image | `XAI_API_KEY` |
+| **minimax** | image-01 | `MINIMAX_API_KEY` |
+
+API keys are set as environment variables or in `openclaw.json` → `env.vars`. The active provider is configured in `openclaw.json` → `skills.entries.hum.config.image_model` (default: `gemini`).
+
+When drafting, add `image_prompt` to the post. Calling `validate(post)` auto-generates the image and sets `media_path`. If `VOICE.md` has a `## Visual Style` section, it is automatically appended to the image prompt.
 
 ## Daily Loop
 

@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import json
 import subprocess
 import sys
 from datetime import datetime
@@ -58,11 +59,38 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
     feed_raw = _CFG["feed_raw"]
     feeds_file = str(_CFG["feeds_file"])
     youtube_feed = str(feed_raw / "youtube_feed.json")
+    hn_feed = str(feed_raw / "hn_feed.json")
     ranked_feed = str(feed_raw / "feed_ranked.json")
     sources_file = str(_CFG["sources_file"])
     feed_dir = _SCRIPTS_ROOT / "feed"
 
-    # Step 1a: Emit browser scraping instructions for X/Twitter feed.
+    # Step 1a: Fetch Hacker News stories directly (Algolia API — no browser needed).
+    # HN posts are merged into feeds_file so they appear in digest alongside X/PH.
+    run_step(
+        "Fetch Hacker News stories (Algolia API)",
+        [sys.executable, str(feed_dir / "source" / "hn.py"),
+         "--days", str(days), "--output", hn_feed],
+        allow_fail=True,
+    )
+    hn_path = Path(hn_feed)
+    if hn_path.exists():
+        try:
+            hn_items = json.loads(hn_path.read_text())
+            existing = []
+            if Path(feeds_file).exists():
+                existing = json.loads(Path(feeds_file).read_text())
+            seen_urls = {p.get("url") for p in existing if p.get("url")}
+            merged = list(existing)
+            for item in hn_items:
+                if item.get("url") and item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
+                    merged.append(item)
+            Path(feeds_file).write_text(json.dumps(merged, indent=2))
+            print(f"[loop] Merged {len(hn_items)} HN posts → feeds_file ({len(merged)} total)", file=sys.stderr)
+        except Exception as exc:
+            print(f"[loop] Could not merge HN feed: {exc}", file=sys.stderr)
+
+    # Step 1b: Emit browser scraping instructions for X/Twitter feed.
     # The agent must execute these via browser tool and save to feeds_file.
     run_step(
         "X/Twitter feed — browser instructions (agent must execute)",
@@ -70,7 +98,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
          "--output", feeds_file],
     )
 
-    # Step 1b: Fetch YouTube creator updates (direct via yt-dlp).
+    # Step 1d: Fetch YouTube creator updates (direct via yt-dlp).
     if not skip_youtube:
         run_step(
             "Fetch YouTube creator updates",
@@ -80,7 +108,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
             allow_fail=True,
         )
 
-    # Steps below depend on feeds_file being populated by the agent.
+    # Steps below depend on feeds_file being fully populated by the agent (X + PH).
     run_step(
         "Rank and score posts",
         [sys.executable, str(feed_dir / "ranker.py"),

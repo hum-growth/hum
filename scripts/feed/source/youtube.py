@@ -41,13 +41,19 @@ STOPWORDS = {
 
 
 def parse_creators(path: Path) -> List[Dict[str, str]]:
-    """Parse sources.json for YouTube creators."""
+    """Parse sources.json for YouTube creators (supports both old and new format)."""
     if not path.exists():
         return []
     with path.open() as f:
         data = json.load(f)
     creators = []
-    for entry in data.get("youtube_creators", []):
+    # New format: feed_sources array with type discriminator
+    if "feed_sources" in data:
+        entries = [s for s in data["feed_sources"] if s.get("type") == "youtube"]
+    else:
+        # Legacy format
+        entries = data.get("youtube_creators", [])
+    for entry in entries:
         url = entry.get("url", "")
         if not url:
             continue
