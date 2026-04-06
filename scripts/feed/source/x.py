@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def classify(text: str, topics: dict[str, list[str]] | None = None) -> list[str]
     if topics is None:
         topics = get_topics()
     lower = text.lower()
-    return [topic for topic, kws in topics.items() if any(kw in lower for kw in kws)]
+    return [topic for topic, kws in topics.items() if any(re.search(r'\b' + re.escape(kw) + r'\b', lower) for kw in kws)]
 
 
 # ── Shared schemas ─────────────────────────────────────────────────────────

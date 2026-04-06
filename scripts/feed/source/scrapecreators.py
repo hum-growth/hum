@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError
@@ -34,16 +35,20 @@ BASE_URL = "https://api.scrapecreators.com"
 
 
 def _api_get(path: str, params: dict, api_key: str) -> dict:
-    """Make a GET request to ScrapeCreators API."""
+    """Make a GET request to ScrapeCreators API with retry/backoff on 429 and 5xx."""
     qs = urlencode({k: v for k, v in params.items() if v is not None})
     url = f"{BASE_URL}{path}?{qs}" if qs else f"{BASE_URL}{path}"
-    req = Request(url, headers={"x-api-key": api_key})
-    try:
-        with urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
-    except HTTPError as e:
-        body = e.read().decode() if e.fp else ""
-        return {"error": f"HTTP {e.code}: {body[:200]}", "status": e.code}
+    for attempt in range(3):
+        req = Request(url, headers={"x-api-key": api_key})
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+                continue
+            body = e.read().decode() if e.fp else ""
+            return {"error": f"HTTP {e.code}: {body[:200]}", "status": e.code}
 
 
 def _parse_x_timestamp(raw: str) -> str | None:

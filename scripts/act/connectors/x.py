@@ -22,11 +22,12 @@ import base64
 import json
 import mimetypes
 import os
+import stat
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+from .http import http_request
 
 CREDENTIALS_DIR = Path(os.environ.get("CREDENTIALS_DIR", Path.home() / ".hum" / "credentials"))
 X_CREDS_PATH = CREDENTIALS_DIR / "x.json"
@@ -43,39 +44,6 @@ XPostError = XConnectorError
 ConnectorError = XConnectorError
 
 
-# ── HTTP helpers ────────────────────────────────────────────────────────────
-
-
-def _http_json(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    payload: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any], dict[str, str]]:
-    body = None
-    req_headers = dict(headers or {})
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        req_headers.setdefault("Content-Type", "application/json")
-
-    req = urllib.request.Request(url, data=body, headers=req_headers, method=method)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            raw = resp.read().decode("utf-8") if resp.readable() else ""
-            data = json.loads(raw) if raw else {}
-            return resp.status, data, dict(resp.headers.items())
-    except urllib.error.HTTPError as err:
-        raw = err.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            data = {"raw": raw}
-        raise ConnectorError(f"{method} {url} → {err.code}: {json.dumps(data)}") from err
-    except urllib.error.URLError as err:
-        raise ConnectorError(f"{method} {url} → {err.reason}") from err
-
-
 # ── Credentials ─────────────────────────────────────────────────────────────
 
 
@@ -83,6 +51,10 @@ def load_credentials(account: str | None) -> dict[str, Any]:
     """Load X API credentials for the given account."""
     if not X_CREDS_PATH.exists():
         return {}
+    cred_path = X_CREDS_PATH
+    mode = cred_path.stat().st_mode
+    if mode & (stat.S_IRGRP | stat.S_IROTH):
+        print(f"Warning: credential file {cred_path} is readable by group/others. Run: chmod 600 {cred_path}", file=sys.stderr)
     with X_CREDS_PATH.open() as f:
         creds = json.load(f)
 
@@ -140,11 +112,12 @@ def _upload_media_api(token: str, image_path: Path) -> str:
         "media_type": content_type,
         "shared": False,
     }
-    _, data, _ = _http_json(
+    _, data, _ = http_request(
         "POST",
         "https://api.x.com/2/media/upload",
         headers=_x_headers(token),
         payload=payload,
+        exc_factory=ConnectorError,
     )
     media_id = data.get("data", {}).get("id")
     if not media_id:
@@ -166,11 +139,12 @@ def _post_api(
         media_id = _upload_media_api(token, media_path)
         payload["media"] = {"media_ids": [media_id]}
 
-    _, data, _ = _http_json(
+    _, data, _ = http_request(
         "POST",
         "https://api.x.com/2/tweets",
         headers=_x_headers(token),
         payload=payload,
+        exc_factory=ConnectorError,
     )
     tweet_id = data.get("data", {}).get("id")
     if not tweet_id:
@@ -209,11 +183,12 @@ def _post_thread_api(
         if previous_id:
             payload["reply"] = {"in_reply_to_tweet_id": previous_id}
 
-        _, data, _ = _http_json(
+        _, data, _ = http_request(
             "POST",
             "https://api.x.com/2/tweets",
             headers=_x_headers(token),
             payload=payload,
+            exc_factory=ConnectorError,
         )
         tweet_id = data.get("data", {}).get("id")
         if not tweet_id:

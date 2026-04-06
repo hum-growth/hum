@@ -15,6 +15,7 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
+from feed.utils import STOPWORDS, parse_likes
 _CFG = load_config()
 SEEN_HISTORY_FILE = str(_CFG["feed_assets"] / "seen_history.json")
 
@@ -43,15 +44,6 @@ def make_story_fingerprint(text: str) -> str:
     Strips stopwords, lowercases, extracts key words, and joins the top 5.
     Two tweets about the same story should share several keywords.
     """
-    STOPWORDS = {
-        "the","a","an","is","are","was","were","has","have","had","be","been","being",
-        "to","of","and","in","on","at","by","for","with","as","from","that","this",
-        "it","i","we","they","he","she","you","my","our","his","her","its","their",
-        "but","or","so","if","do","did","does","will","would","could","should","may",
-        "can","not","no","up","out","what","who","how","just","now","new","about",
-        "more","over","after","before","than","also","which","when","all","some",
-        "into","per","via","re","vs","its","said","says"
-    }
     words = re.findall(r"[a-zA-Z]{3,}", text.lower())
     filtered = [w for w in words if w not in STOPWORDS]
     # Use the first 8 meaningful words as fingerprint
@@ -67,28 +59,14 @@ def post_sort_key(post: dict) -> tuple:
     return (1, parse_likes(post.get("likes", 0)))
 
 
-def parse_likes(likes_str) -> int:
-    if isinstance(likes_str, int):
-        return likes_str
-    s = str(likes_str).strip().upper().replace(",", "")
-    try:
-        if s.endswith("K"):
-            return int(float(s[:-1]) * 1000)
-        if s.endswith("M"):
-            return int(float(s[:-1]) * 1_000_000)
-        return int(s)
-    except (ValueError, AttributeError):
-        return 0
-
-
 def load_seen_history() -> dict:
     """Load the seen history file. Returns {url: iso_date, fingerprint: iso_date}."""
     if os.path.exists(SEEN_HISTORY_FILE):
         try:
             with open(SEEN_HISTORY_FILE) as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[digest] Error: {e}", file=sys.stderr)
     return {}
 
 

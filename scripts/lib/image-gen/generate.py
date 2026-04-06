@@ -121,6 +121,101 @@ def enhance_prompt(prompt: str) -> str:
 
 # ── Main generation ───────────────────────────────────────────────────────────
 
+
+def generate_image(
+    prompt: str,
+    platform: str | None = None,
+    output_path: str | None = None,
+    *,
+    provider: str = "gemini",
+    size: str | None = None,
+    model: str | None = None,
+    style: str | None = None,
+    no_enhance: bool = False,
+    emit_json: bool = False,
+) -> str:
+    """Generate an image and return the output path (or base64 if no output_path).
+
+    Args:
+        prompt: Image description.
+        platform: Target platform preset (e.g. "twitter", "linkedin").
+        output_path: Where to save the image. If None and emit_json is False,
+            returns base64-encoded image bytes as a string.
+        provider: Provider name ("gemini", "grok", "minimax", "openai").
+        size: Size string "WxH" — overrides platform.
+        model: Provider-specific model override.
+        style: Style directive passed to the provider.
+        no_enhance: Skip LLM prompt enhancement.
+        emit_json: Print JSON result to stdout instead of saving file.
+
+    Returns:
+        output_path if saved, or base64 string if no output_path.
+
+    Raises:
+        RuntimeError: If provider is unknown, initialization fails, or generation fails.
+    """
+    # Resolve size
+    resolved_size: tuple[int, int] | None = None
+    if size:
+        w, h = size.lower().split("x")
+        resolved_size = (int(w), int(h))
+    elif platform:
+        resolved_size = PLATFORM_SIZES.get(platform)
+
+    # Enhance prompt
+    enhanced = prompt
+    if not no_enhance:
+        enhanced = enhance_prompt(prompt)
+
+    # Instantiate provider
+    providers = load_providers()
+    cls = providers.get(provider)
+    if not cls:
+        raise RuntimeError(
+            f"[image-gen] Unknown provider: {provider}. "
+            f"Available: {', '.join(providers.keys())}"
+        )
+
+    try:
+        prov_instance = cls()
+    except Exception as exc:
+        raise RuntimeError(f"[image-gen] Failed to initialize {provider}: {exc}") from exc
+
+    print(f"[image-gen] Generating with {provider} (size={resolved_size or 'default'})...", file=sys.stderr)
+
+    try:
+        result = prov_instance.generate(
+            prompt=enhanced,
+            size=resolved_size,
+            model=model,
+            style=style,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"[image-gen] Generation failed: {exc}") from exc
+
+    if emit_json:
+        output = {
+            "success": True,
+            "provider": result.provider,
+            "model": result.model,
+            "size": resolved_size,
+            "prompt": prompt,
+            "enhanced_prompt": enhanced if not no_enhance else None,
+            "revised_prompt": result.revised_prompt,
+            "image_b64": base64.b64encode(result.image_bytes).decode(),
+            "mime_type": result.mime_type,
+        }
+        print(json.dumps(output, indent=2))
+        return ""
+
+    if output_path:
+        Path(output_path).write_bytes(result.image_bytes)
+        print(f"[image-gen] Saved: {output_path} ({len(result.image_bytes):,} bytes)", file=sys.stderr)
+        return output_path
+
+    return base64.b64encode(result.image_bytes).decode()
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI image generation — multi-provider")
     parser.add_argument("--prompt", "-p", required=True, help="Image description")
@@ -154,67 +249,26 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve size
-    size: tuple[int, int] | None = None
-    if args.size:
-        w, h = args.size.lower().split("x")
-        size = (int(w), int(h))
-    elif args.platform:
-        size = PLATFORM_SIZES[args.platform]
-
-    # Enhance prompt
-    enhanced = args.prompt
-    if not args.no_enhance:
-        enhanced = enhance_prompt(args.prompt)
-
-    # Instantiate provider
-    providers = load_providers()
-    cls = providers.get(args.provider)
-    if not cls:
-        print(f"[image-gen] Unknown provider: {args.provider}", file=sys.stderr)
-        print(f"[image-gen] Available: {', '.join(providers.keys())}", file=sys.stderr)
-        sys.exit(1)
-
     try:
-        provider = cls()
-    except Exception as exc:
-        print(f"[image-gen] Failed to initialize {args.provider}: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    # Generate
-    print(f"[image-gen] Generating with {args.provider} (size={size or 'default'})...", file=sys.stderr)
-
-    try:
-        result: ImageResult = provider.generate(
-            prompt=enhanced,
-            size=size,
+        result = generate_image(
+            prompt=args.prompt,
+            platform=args.platform,
+            output_path=args.output,
+            provider=args.provider,
+            size=args.size,
             model=args.model,
             style=args.style,
+            no_enhance=args.no_enhance,
+            emit_json=args.json,
         )
-    except Exception as exc:
-        print(f"[image-gen] Generation failed: {exc}", file=sys.stderr)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
         sys.exit(1)
 
-    # Output
-    if args.json:
-        output = {
-            "success": True,
-            "provider": result.provider,
-            "model": result.model,
-            "size": size,
-            "prompt": args.prompt,
-            "enhanced_prompt": enhanced if not args.no_enhance else None,
-            "revised_prompt": result.revised_prompt,
-            "image_b64": base64.b64encode(result.image_bytes).decode(),
-            "mime_type": result.mime_type,
-        }
-        print(json.dumps(output, indent=2))
-    elif args.output:
-        Path(args.output).write_bytes(result.image_bytes)
-        print(f"[image-gen] Saved: {args.output} ({len(result.image_bytes):,} bytes)", file=sys.stderr)
-        print(args.output)
-    else:
-        sys.stdout.write(base64.b64encode(result.image_bytes).decode())
+    if result and not args.json and not args.output:
+        sys.stdout.write(result)
+    elif result and args.output:
+        print(result)
 
 
 if __name__ == "__main__":

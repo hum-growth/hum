@@ -1,0 +1,2 @@
+# Pin to the exact version you have installed: run `yt-dlp --version` to check
+yt-dlp>=2024.1.0

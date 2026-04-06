@@ -22,7 +22,8 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _SCRIPTS_ROOT = Path(__file__).resolve().parent
@@ -43,6 +44,26 @@ def run_step(label: str, cmd: list[str], *, allow_fail: bool = False) -> int:
     if result.returncode != 0 and not allow_fail:
         print(f"✗ {label} failed (exit {result.returncode})", file=sys.stderr)
     return result.returncode
+
+
+def _write_run_summary(data_dir: Path, summary: dict) -> None:
+    """Write run summary to run_log.json (latest) and append to runs.jsonl (history)."""
+    feed_dir = data_dir / "feed"
+    feed_dir.mkdir(parents=True, exist_ok=True)
+
+    run_log = feed_dir / "run_log.json"
+    runs_jsonl = feed_dir / "runs.jsonl"
+
+    try:
+        run_log.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"[loop] Could not write run_log.json: {exc}", file=sys.stderr)
+
+    try:
+        with runs_jsonl.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(summary) + "\n")
+    except OSError as exc:
+        print(f"[loop] Could not append to runs.jsonl: {exc}", file=sys.stderr)
 
 
 # ── Step 1: Feed Digest ────────────────────────────────────────────────────
@@ -87,7 +108,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
                     merged.append(item)
             Path(feeds_file).write_text(json.dumps(merged, indent=2))
             print(f"[loop] Merged {len(hn_items)} HN posts → feeds_file ({len(merged)} total)", file=sys.stderr)
-        except Exception as exc:
+        except (json.JSONDecodeError, OSError) as exc:
             print(f"[loop] Could not merge HN feed: {exc}", file=sys.stderr)
 
     # Step 1b: Emit browser scraping instructions for X/Twitter feed.
@@ -233,18 +254,64 @@ def main():
         print("   📚 Sunday — includes weekly strategy refresh")
     print()
 
+    run_ts = datetime.now(timezone.utc).astimezone().isoformat()
+    steps: dict = {}
+    errors: list[str] = []
+
     # Step 1: Digest
-    run_digest(args.max_posts, args.days, args.skip_youtube)
+    t0 = time.time()
+    try:
+        run_digest(args.max_posts, args.days, args.skip_youtube)
+        steps["digest"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+    except Exception as exc:
+        msg = f"[loop] digest failed: {exc}"
+        print(msg, file=sys.stderr)
+        steps["digest"] = {"status": "error", "duration_s": round(time.time() - t0, 1)}
+        errors.append(msg)
 
     # Step 2: Engage
-    run_engage()
+    t0 = time.time()
+    try:
+        run_engage()
+        steps["engage"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+    except Exception as exc:
+        msg = f"[loop] engage failed: {exc}"
+        print(msg, file=sys.stderr)
+        steps["engage"] = {"status": "error", "duration_s": round(time.time() - t0, 1)}
+        errors.append(msg)
 
     # Step 3: Brainstorm
-    run_brainstorm()
+    t0 = time.time()
+    try:
+        run_brainstorm()
+        steps["brainstorm"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+    except Exception as exc:
+        msg = f"[loop] brainstorm failed: {exc}"
+        print(msg, file=sys.stderr)
+        steps["brainstorm"] = {"status": "error", "duration_s": round(time.time() - t0, 1)}
+        errors.append(msg)
 
     # Step 4: Learn (Sundays only)
     if is_sunday:
-        run_learn()
+        t0 = time.time()
+        try:
+            run_learn()
+            steps["learn"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+        except Exception as exc:
+            msg = f"[loop] learn failed: {exc}"
+            print(msg, file=sys.stderr)
+            steps["learn"] = {"status": "error", "duration_s": round(time.time() - t0, 1)}
+            errors.append(msg)
+
+    summary = {
+        "timestamp": run_ts,
+        "status": "error" if errors else "ok",
+        "steps": steps,
+        "errors": errors,
+    }
+    data_dir = _CFG.get("data_dir")
+    if data_dir:
+        _write_run_summary(Path(data_dir), summary)
 
     print("\n" + "═" * 50)
     print("✓ Daily loop complete.")

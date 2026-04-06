@@ -16,20 +16,11 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
+from feed.utils import STOPWORDS
 _CFG = load_config()
 ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 LOG_FILE = os.path.join(ASSETS_DIR, "feedback_log.json")
-
-STOPWORDS = {
-    "a","an","the","and","or","but","in","on","at","to","for","of","with",
-    "is","it","its","was","are","be","been","being","have","has","had","do",
-    "does","did","will","would","could","should","may","might","shall","can",
-    "not","this","that","these","those","we","i","you","he","she","they","our",
-    "my","your","his","her","their","all","from","by","as","up","if","so","no",
-    "more","just","now","like","also","here","about","out","into","how","what",
-    "why","when","where","who","which","than","then","each","some","any","re"
-}
 
 def load_json(path, default):
     if os.path.exists(path):

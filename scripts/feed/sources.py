@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,9 @@ def cmd_list(sources: dict, filter_type: str | None = None):
 def cmd_add(sources: dict, args) -> bool:
     if args.source_type == "x":
         handle = args.value.lstrip("@")
+        if not re.match(r'^[A-Za-z0-9_]{1,15}$', handle):
+            print(f"Error: invalid handle/URL: '{args.value}'", file=sys.stderr)
+            return False
         existing = get_by_type(sources, "x_profile")
         if any(s["handle"].lower() == handle.lower() for s in existing):
             print(f"@{handle} already exists.")
@@ -110,6 +114,9 @@ def cmd_add(sources: dict, args) -> bool:
 
     elif args.source_type == "linkedin":
         url = args.value.rstrip("/")
+        if "linkedin.com/in/" not in url:
+            print(f"Error: invalid handle/URL: '{args.value}'", file=sys.stderr)
+            return False
         existing = get_by_type(sources, "linkedin_profile")
         if any(s["url"].rstrip("/").lower() == url.lower() for s in existing):
             print(f"{url} already exists.")
@@ -129,6 +136,11 @@ def cmd_add(sources: dict, args) -> bool:
 
     elif args.source_type == "youtube":
         url = args.value
+        is_yt_url = "youtube.com" in url or "youtu.be" in url
+        is_handle = url.startswith("@")
+        if not (is_yt_url or is_handle):
+            print(f"Error: invalid handle/URL: '{url}'", file=sys.stderr)
+            return False
         existing = get_by_type(sources, "youtube")
         if any(s["url"].lower() == url.lower() for s in existing):
             print(f"{url} already exists.")

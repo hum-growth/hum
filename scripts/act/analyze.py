@@ -167,6 +167,7 @@ def analyze_all(account: str) -> dict[str, Any]:
         except NotImplementedError:
             results[platform] = {"status": "not_implemented"}
         except Exception as e:
+            print(f"[analyze] Unexpected error on {platform}: {e}", file=sys.stderr)
             results[platform] = {"status": "error", "message": str(e)}
     return results
 
@@ -193,7 +194,7 @@ def main():
         print(f"NOT IMPLEMENTED: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        print(f"[analyze] Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

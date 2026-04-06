@@ -179,6 +179,7 @@ def main():
         return
 
     results = {}
+    counts: dict[str, int] = {}
 
     # x_browser — always emits instructions, doesn't use API
     if args.type in ("x_browser", "all"):
@@ -199,6 +200,7 @@ def main():
                 output_path=raw_dir / "x_profile_feed.json",
             )
             results["x_profile"] = items
+            counts["x_profile"] = len(items)
 
     # linkedin_profile — ScrapeCreators API
     if args.type in ("linkedin_profile", "all"):
@@ -210,15 +212,21 @@ def main():
                 output_path=raw_dir / "linkedin_feed.json",
             )
             results["linkedin_profile"] = items
+            counts["linkedin_profile"] = len(items)
 
     # Save updated last_crawled timestamps
     save_sources(sources_file, sources)
 
     # Summary
-    total = sum(len(v) for v in results.values() if isinstance(v, list))
+    total = sum(counts.values())
     print(f"\nRefresh complete. {total} new items across API sources.")
+    if counts:
+        for source, n in counts.items():
+            print(f"  {source}: {n} items")
     if "x_browser" in results:
         print("X browser instructions emitted — execute via browser tool.")
+
+    return counts
 
 
 if __name__ == "__main__":

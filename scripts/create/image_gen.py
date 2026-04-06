@@ -16,24 +16,15 @@ import base64
 import json
 import os
 import sys
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
-
 
 # Path to the image-gen lib (bundled inside hum)
 _IMAGE_GEN_DIR = Path(__file__).resolve().parent.parent / "lib" / "image-gen"
-_IMAGE_GEN_SCRIPT = _IMAGE_GEN_DIR / "generate.py"
 
+if str(_IMAGE_GEN_DIR) not in sys.path:
+    sys.path.insert(0, str(_IMAGE_GEN_DIR))
 
-def _load_generate_script():
-    """Load generate.py as a module."""
-    if not _IMAGE_GEN_SCRIPT.exists():
-        raise FileNotFoundError(
-            f"image-gen lib not found at {_IMAGE_GEN_SCRIPT}. "
-            "Check that scripts/lib/image-gen/ exists."
-        )
-    loader = SourceFileLoader("img_gen_script", str(_IMAGE_GEN_SCRIPT))
-    return loader.load_module()
+from generate import generate_image as _generate_image  # noqa: E402
 
 
 def _resolve_provider(provider: str | None) -> str:
@@ -99,61 +90,37 @@ def generate_image(
     Raises:
         RuntimeError: If generation fails
     """
-    script = _load_generate_script()
-
     resolved_provider = _resolve_provider(provider)
     resolved_style = _resolve_style(style)
 
-    # Map "x" to "twitter" for the generate.py CLI
+    # Map "x" to "twitter" for generate.py platform presets
     platform_arg = platform
     if platform_arg == "x":
         platform_arg = "twitter"
 
-    # Resolve size
+    # Resolve size string
     if size is None and platform:
         size = PLATFORM_SIZES.get(platform)
-
     size_str = f"{size[0]}x{size[1]}" if size else None
 
-    # Build args
-    args = [
-        "--provider", resolved_provider,
-    ]
-    if no_enhance:
-        args += ["--no-enhance", "--prompt", prompt]
-    else:
-        args += ["--prompt", prompt]
-    if platform_arg:
-        args.extend(["--platform", platform_arg])
-    if size_str:
-        args.extend(["--size", size_str])
-    if model:
-        args.extend(["--model", model])
-    if resolved_style:
-        args.extend(["--style", resolved_style])
-
     if output_path is None:
-        ext = "png"
-        output_path = f"/tmp/hum-image-{os.getpid()}.{ext}"
+        output_path = f"/tmp/hum-image-{os.getpid()}.png"
 
-    args.extend(["--output", output_path])
-
-    # Patch sys.argv for the script's argparse
-    old_argv = sys.argv
-    sys.argv = ["generate.py"] + args
-
-    try:
-        script.main()
-    except SystemExit as exc:
-        if exc.code != 0:
-            raise RuntimeError(f"Image generation failed with exit code {exc.code}")
-    finally:
-        sys.argv = old_argv
+    saved = _generate_image(
+        prompt=prompt,
+        platform=platform_arg,
+        output_path=output_path,
+        provider=resolved_provider,
+        size=size_str,
+        model=model,
+        style=resolved_style,
+        no_enhance=no_enhance,
+    )
 
     if not Path(output_path).exists():
         raise RuntimeError(f"Image was not saved to {output_path}")
 
-    return output_path
+    return saved or output_path
 
 
 def generate_image_json(
@@ -182,56 +149,41 @@ def generate_image_json(
             "image_path": temp file path,
         }
     """
-    script = _load_generate_script()
+    import io
 
     resolved_provider = _resolve_provider(provider)
     resolved_style = _resolve_style(style)
 
     if size is None and platform:
         size = PLATFORM_SIZES.get(platform)
-
     size_str = f"{size[0]}x{size[1]}" if size else None
 
-    args = ["--provider", resolved_provider, "--json"]
-    if no_enhance:
-        args += ["--no-enhance", "--prompt", prompt]
-    else:
-        args += ["--prompt", prompt]
-    if platform:
-        args.extend(["--platform", platform])
-    if size_str:
-        args.extend(["--size", size_str])
-    if model:
-        args.extend(["--model", model])
-    if resolved_style:
-        args.extend(["--style", resolved_style])
-
-    old_argv = sys.argv
-    sys.argv = ["generate.py"] + args
-
+    # Capture the JSON printed to stdout by emit_json=True
+    old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
     try:
-        # Capture stdout
-        import io
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            script.main()
-        finally:
-            output = sys.stdout.getvalue()
-            sys.stdout = old_stdout
-
-        data = json.loads(output)
-        # Also write the temp file
-        if data.get("success") and data.get("image_b64"):
-            img_bytes = base64.b64decode(data["image_b64"])
-            ext = "png"
-            img_path = f"/tmp/hum-image-{os.getpid()}.{ext}"
-            Path(img_path).write_bytes(img_bytes)
-            data["image_path"] = img_path
-        return data
-
-    except SystemExit as exc:
-        sys.stdout = old_stdout
-        raise RuntimeError(f"Image generation failed with exit code {exc.code}")
+        _generate_image(
+            prompt=prompt,
+            platform=platform,
+            output_path=None,
+            provider=resolved_provider,
+            size=size_str,
+            model=model,
+            style=resolved_style,
+            no_enhance=no_enhance,
+            emit_json=True,
+        )
+        output = sys.stdout.getvalue()
     finally:
-        sys.argv = old_argv
+        sys.stdout = old_stdout
+
+    data = json.loads(output)
+
+    # Write temp file from b64 payload
+    if data.get("success") and data.get("image_b64"):
+        img_bytes = base64.b64decode(data["image_b64"])
+        img_path = f"/tmp/hum-image-{os.getpid()}.png"
+        Path(img_path).write_bytes(img_bytes)
+        data["image_path"] = img_path
+
+    return data

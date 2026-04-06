@@ -20,13 +20,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .http import http_request
 
 CREDENTIALS_DIR = Path(os.environ.get("CREDENTIALS_DIR", Path.home() / ".hum" / "credentials"))
 LINKEDIN_CREDS_PATH = CREDENTIALS_DIR / "linkedin.json"
@@ -43,57 +44,6 @@ LinkedInPostError = LinkedInConnectorError
 ConnectorError = LinkedInConnectorError
 
 
-# ── HTTP helpers ────────────────────────────────────────────────────────────
-
-
-def _http_json(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    payload: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any], dict[str, str]]:
-    body = None
-    req_headers = dict(headers or {})
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        req_headers.setdefault("Content-Type", "application/json")
-
-    req = urllib.request.Request(url, data=body, headers=req_headers, method=method)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            raw = resp.read().decode("utf-8") if resp.readable() else ""
-            data = json.loads(raw) if raw else {}
-            return resp.status, data, dict(resp.headers.items())
-    except urllib.error.HTTPError as err:
-        raw = err.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            data = {"raw": raw}
-        raise ConnectorError(f"{method} {url} → {err.code}: {json.dumps(data)}") from err
-    except urllib.error.URLError as err:
-        raise ConnectorError(f"{method} {url} → {err.reason}") from err
-
-
-def _http_bytes(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    body: bytes | None = None,
-) -> tuple[int, bytes, dict[str, str]]:
-    req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, resp.read(), dict(resp.headers.items())
-    except urllib.error.HTTPError as err:
-        raw = err.read().decode("utf-8", errors="replace")
-        raise ConnectorError(f"{method} {url} → {err.code}: {raw}") from err
-    except urllib.error.URLError as err:
-        raise ConnectorError(f"{method} {url} → {err.reason}") from err
-
-
 # ── Credentials ─────────────────────────────────────────────────────────────
 
 
@@ -101,6 +51,10 @@ def load_credentials(account: str | None) -> dict[str, Any]:
     """Load LinkedIn API credentials for the given account."""
     if not LINKEDIN_CREDS_PATH.exists():
         return {}
+    cred_path = LINKEDIN_CREDS_PATH
+    mode = cred_path.stat().st_mode
+    if mode & (stat.S_IRGRP | stat.S_IROTH):
+        print(f"Warning: credential file {cred_path} is readable by group/others. Run: chmod 600 {cred_path}", file=sys.stderr)
     with LINKEDIN_CREDS_PATH.open() as f:
         creds = json.load(f)
 
@@ -147,11 +101,12 @@ def _linkedin_headers(token: str) -> dict[str, str]:
 def _upload_image_api(token: str, author_urn: str, image_path: Path) -> str:
     """Upload an image to LinkedIn. Returns image URN."""
     init_payload = {"initializeUploadRequest": {"owner": author_urn}}
-    _, data, _ = _http_json(
+    _, data, _ = http_request(
         "POST",
         "https://api.linkedin.com/rest/images?action=initializeUpload",
         headers=_linkedin_headers(token),
         payload=init_payload,
+        exc_factory=ConnectorError,
     )
     value = data.get("value", {})
     upload_url = value.get("uploadUrl")
@@ -159,11 +114,12 @@ def _upload_image_api(token: str, author_urn: str, image_path: Path) -> str:
     if not upload_url or not image_urn:
         raise ConnectorError(f"LinkedIn image initializeUpload failed: {data}")
 
-    _http_bytes(
+    http_request(
         "PUT",
         upload_url,
         headers={"Authorization": f"Bearer {token}"},
         body=image_path.read_bytes(),
+        exc_factory=ConnectorError,
     )
     return image_urn
 
@@ -200,11 +156,12 @@ def _post_api(
             "media": {"id": image_urn, "altText": "Post image"},
         }
 
-    _, _, headers = _http_json(
+    _, _, headers = http_request(
         "POST",
         "https://api.linkedin.com/rest/posts",
         headers=_linkedin_headers(token),
         payload=payload,
+        exc_factory=ConnectorError,
     )
     post_urn = headers.get("x-restli-id") or headers.get("X-RestLi-Id")
     if not post_urn:

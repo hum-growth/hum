@@ -25,6 +25,7 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.source.x import classify
+from feed.utils import STOPWORDS
 
 _CFG = load_config()
 
@@ -33,11 +34,6 @@ DEFAULT_SOURCES_FILE = _CFG["sources_file"]
 from lib import youtube_yt  # noqa: E402
 
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
-STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "for",
-    "from", "how", "in", "into", "is", "it", "its", "of", "on", "or", "that",
-    "the", "their", "this", "to", "was", "were", "what", "when", "with", "you",
-}
 
 
 def parse_creators(path: Path) -> List[Dict[str, str]]:
@@ -85,7 +81,11 @@ def fetch_creator_videos(url: str, since_date: str, max_videos: int) -> Dict[str
         url,
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        print(f"[youtube] yt-dlp timed out after 60s", file=sys.stderr)
+        return {}
     if proc.returncode != 0 and not proc.stdout.strip():
         error = (proc.stderr or proc.stdout or "yt-dlp failed").strip().splitlines()[:1]
         return {"items": [], "error": error[0] if error else "yt-dlp failed"}

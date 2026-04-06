@@ -69,6 +69,7 @@ def follow_accounts(
                 "message": f"{platform} follow not yet implemented via API",
             })
         except Exception as e:
+            print(f"[engage] Unexpected error following {handle}: {e}", file=sys.stderr)
             results.append({
                 "handle": handle,
                 "status": "error",
@@ -149,7 +150,7 @@ def main():
         print(f"NOT IMPLEMENTED: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        print(f"[engage] Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

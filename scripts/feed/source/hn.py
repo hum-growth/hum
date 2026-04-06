@@ -49,7 +49,7 @@ def fetch_algolia(tag: str, hits_per_page: int = 30, days_back: int = 7) -> list
         with urllib.request.urlopen(url, timeout=15) as resp:
             data = json.loads(resp.read().decode())
             return data.get("hits", [])
-    except Exception as exc:
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         # Fallback without numeric filter
         url_fallback = f"{ALGOLIA_BASE}/search?tags={tag}&hitsPerPage={hits_per_page}"
         try:
@@ -60,8 +60,8 @@ def fetch_algolia(tag: str, hits_per_page: int = 30, days_back: int = 7) -> list
                 import time
                 cutoff = int(time.time()) - (days_back * 86400)
                 return [h for h in hits if h.get("created_at_i", 0) > cutoff]
-        except Exception as exc2:
-            print(f"[HN] Error fetching {tag}: {exc2}", file=sys.stderr)
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc2:
+            print(f"[hn] Error fetching {tag}: {exc2}", file=sys.stderr)
             return []
 
 
@@ -87,7 +87,7 @@ def parse_story(hit: dict, story_type: str) -> dict | None:
     created = hit.get("created_at", "")
     try:
         date_str = datetime.fromisoformat(created.replace("Z", "+00:00")).strftime("%Y-%m-%d")
-    except Exception:
+    except (ValueError, AttributeError):
         date_str = created[:10] if created else ""
 
     # Classify topics from title + text
