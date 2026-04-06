@@ -4,7 +4,7 @@ image_gen.py — Image generation wrapper for hum content creation.
 Wraps scripts/lib/image-gen/generate.py so it can be called
 as a Python module without subprocess.
 
-Provider is resolved from: explicit arg > IMAGE_MODEL env > openclaw.json > "gemini".
+Provider is resolved from: explicit arg > HUM_IMAGE_MODEL env > openclaw.json > "gemini".
 Visual style from VOICE.md is auto-injected when no style arg is given.
 
 Usage:

@@ -77,7 +77,7 @@ def home_feed_instructions(scrolls: int = 5, output: str | None = None) -> dict:
             "Navigate to https://x.com/home",
             f"Scroll {scrolls} times, waiting 2s between each scroll to load content",
             "For each visible tweet:",
-            "  - Extract author handle, display name, full text (click 'Show more' if truncated)",
+            "  - Extract author handle, display name, full text — you MUST click 'Show more' on every tweet that has it before reading the text; never use the truncated inline preview",
             "  - Extract engagement counts: likes, retweets, replies, views",
             "  - Extract tweet URL",
             "  - Extract all attached media:",
@@ -87,12 +87,74 @@ def home_feed_instructions(scrolls: int = 5, output: str | None = None) -> dict:
             "  - If tweet is a quote tweet, also extract the quoted tweet content and media",
             "Filter to tweets matching at least one topic keyword (see topics below)",
             "Deduplicate by URL",
+            "Set source='x' on every item",
             f"Output JSON to: {out}",
         ],
         "topics": get_topics(),
         "output_schema": {
-            "items": [TWEET_SCHEMA],
+            "items": [{**TWEET_SCHEMA, "source": "x"}],
             "note": "topics field is added per-item based on keyword classification",
+        },
+    }
+
+
+# ── Profile scraping ──────────────────────────────────────────────────────
+
+def profile_instructions(
+    handle: str,
+    output: str | None = None,
+    limit: int = 20,
+    since: str | None = None,
+) -> dict:
+    """Generate browser automation instructions for scraping an X profile's posts.
+
+    Args:
+        handle: X handle (without @)
+        output: Path to write JSON results
+        limit: Max number of tweets to extract (default 20)
+        since: ISO 8601 timestamp — stop when a tweet is older than this
+    """
+    out = output or str(_CFG["feed_raw"] / f"x_{handle}.json")
+    since_step = (
+        f"  - Check the tweet's timestamp: if it was posted BEFORE {since}, STOP immediately — do not extract this or any further tweets"
+        if since else None
+    )
+    steps = [
+        f"Navigate to https://x.com/{handle}",
+        "Wait for the page to fully load",
+        f"Extract up to {limit} tweets from this profile's timeline, scrolling as needed",
+    ]
+    if since:
+        steps.append(f"Stop as soon as you encounter a tweet posted before {since} — do not extract it")
+    steps += [
+        "For each tweet in chronological reverse order (newest first):",
+        "  - Extract author handle, display name, full text — you MUST click 'Show more' on every tweet that has it before reading the text; never use the truncated inline preview",
+        "  - Extract engagement counts: likes, retweets, replies, views",
+        "  - Extract tweet URL",
+        "  - Extract all attached media:",
+        "    - Images: get full-res URL (format=jpg&name=large)",
+        "    - Videos: note the thumbnail URL and video URL if accessible",
+        "    - GIFs: extract the video/mp4 URL",
+        "  - If tweet is a quote tweet, also extract the quoted tweet content and media",
+    ]
+    if since_step:
+        steps.append(since_step)
+    steps += [
+        "Deduplicate by URL",
+        "Set source='x' on every item",
+        f"Output JSON to: {out}",
+    ]
+    return {
+        "action": "scrape_x_profile",
+        "profile": {
+            "handle": handle,
+            "url": f"https://x.com/{handle}",
+        },
+        "steps": steps,
+        "output_schema": {
+            "handle": handle,
+            "tweet_count": "number of tweets extracted",
+            "items": [{**TWEET_SCHEMA, "source": "x"}],
         },
     }
 

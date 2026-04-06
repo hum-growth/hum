@@ -25,7 +25,10 @@ Run `scripts/feed/ranker.py`. Depends on step 1 completing (needs feeds.json).
 
 ## Step 4 — Format and send digest
 
-Run `scripts/feed/digest.py`. Send the output via Telegram to Justin.
+Run `scripts/feed/digest.py`. Deliver the output to the configured digest target:
+
+1. Run `python3 -c "from skills.hum.scripts.config import load_config; c=load_config(); print(c['digest_target'] or '')"` to read the target.
+2. If a target is returned, send there. If empty, log a warning and skip delivery.
 
 ## Step 5 — Engage (parallel with steps 3-4)
 

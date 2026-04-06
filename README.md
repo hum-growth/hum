@@ -49,7 +49,7 @@ Set the data directory via `openclaw.json` or environment variable (defaults to 
     "entries": {
       "hum": {
         "config": {
-          "data_dir": "~/Documents/hum"
+          "hum_data_dir": "~/Documents/hum"
         }
       }
     }
@@ -62,72 +62,35 @@ Set the data directory via `openclaw.json` or environment variable (defaults to 
 export HUM_DATA_DIR=~/Documents/hum
 ```
 
-### 2. Initialize
+### 2. Configure digest delivery
 
-Run `/hum init` to create all required directories and template files. Then edit the generated files in your data directory to set up your voice, audience, channels, and content pillars.
+Set where the morning digest is delivered. Supports any channel target recognised by your agent runtime (Telegram chat ID, WhatsApp number, etc.).
 
-### 3. API Keys
-
-Hum uses different APIs for feed crawling, publishing, and image generation. Many feed sources are **free with no API key**. The table below shows what's needed for each capability.
-
-#### Feed Sources
-
-| Source | Method | API Key | Cost |
-|--------|--------|---------|------|
-| **X home feed** | Browser scrolling | None (browser session) | Free |
-| **X profiles** | [ScrapeCreators](https://scrapecreators.com) API | `SCRAPECREATORS_API_KEY` | 100 free credits, then PAYG |
-| **LinkedIn profiles** | [ScrapeCreators](https://scrapecreators.com) API | `SCRAPECREATORS_API_KEY` | 100 free credits, then PAYG |
-| **YouTube** | yt-dlp (local tool) | None | Free |
-| **Hacker News** | Algolia public API | None | Free |
-| **Product Hunt** | Browser scrolling | None (browser session) | Free |
-
-One `SCRAPECREATORS_API_KEY` covers both X profile crawling and LinkedIn profile crawling. Sign up at [scrapecreators.com](https://scrapecreators.com) for 100 free API credits.
-
-X home feed and Product Hunt use browser automation (the agent scrolls the page via browser tool). X/LinkedIn profile crawling uses the ScrapeCreators REST API to fetch posts without browser control.
-
-**Set the key in `openclaw.json`:**
+**Option A — openclaw.json** (recommended):
 ```json
 {
-  "env": {
-    "vars": {
-      "SCRAPECREATORS_API_KEY": "your_key_here"
+  "skills": {
+    "entries": {
+      "hum": {
+        "config": {
+          "hum_digest_target": "telegram:123456789"
+        }
+      }
     }
   }
 }
 ```
 
-Or as an environment variable:
+**Option B — environment variable:**
 ```bash
-export SCRAPECREATORS_API_KEY=your_key_here
+export HUM_DIGEST_TARGET=telegram:123456789
 ```
 
-### Environment Variables
+If `hum_digest_target` is not set, the daily loop will skip digest delivery and log a warning.
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
-| `IMAGE_MODEL` | `gemini` | Image generation provider override |
-| `SCRAPECREATORS_API_KEY` | (from `openclaw.json`) | X profile + LinkedIn profile crawling |
-| `CREDENTIALS_DIR` | `~/.hum/credentials/` | Publishing credential files |
-| `X_USER_ACCESS_TOKEN` | (from file) | X API token override |
-| `LINKEDIN_ACCESS_TOKEN` | (from file) | LinkedIn API token override |
-| `LINKEDIN_AUTHOR_URN` | (from file) | LinkedIn author URN override |
+### 3. Setup workspace and content profile
 
-### Data that leaves your machine
-
-| Destination | Data Sent | Key Required |
-|-------------|-----------|--------------|
-| `api.scrapecreators.com` | Profile handle/URL | `SCRAPECREATORS_API_KEY` |
-| `api.x.com` | Post content (publishing) | `X_USER_ACCESS_TOKEN` |
-| `api.linkedin.com` | Post content (publishing) | `LINKEDIN_ACCESS_TOKEN` |
-| `generativelanguage.googleapis.com` | Image prompt (Gemini image gen) | `GEMINI_API_KEY` |
-| `api.openai.com` | Image prompt (OpenAI image gen) | `OPENAI_API_KEY` |
-| `api.x.ai` | Image prompt (Grok image gen) | `XAI_API_KEY` |
-| `api.minimax.chat` | Image prompt (MiniMax image gen) | `MINIMAX_API_KEY` |
-| `hn.algolia.com` | Search query | None (public API) |
-| `youtube.com` (via yt-dlp) | Channel URL | None (public) |
-
-Each API key is transmitted only to its respective endpoint. Your ScrapeCreators key is never sent to X or LinkedIn APIs, and vice versa.
+Run `/hum init` to create all required directories and template files. Then edit the generated files in your data directory to set up your voice, audience, channels, and content pillars.
 
 ## Commands
 
@@ -209,9 +172,37 @@ Runs at 6am SGT via `scripts/loop.py`. Sundays include an extra strategy refresh
 
 Run individual steps with `python3 scripts/loop.py --step digest|engage|brainstorm|learn`.
 
+## Feed
+
+All feed sources use browser automation — the agent scrolls and extracts content via the browser tool. No API keys are required for feed crawling.
+
+| Source | Method | API Key | Cost |
+|--------|--------|---------|------|
+| **X home feed** | Browser scrolling | None (browser session) | Free |
+| **LinkedIn home feed** | Browser automation | None (browser session) | Free |
+| **YouTube** | yt-dlp (local tool) | None | Free |
+| **Hacker News** | Algolia public API | None | Free |
+| **Product Hunt** | Browser scrolling | None (browser session) | Free |
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
+| `HUM_DIGEST_TARGET` | *(from openclaw.json)* | Delivery target for morning digest (e.g. `telegram:123456789`) |
+
+### Data that leaves your machine
+
+| Destination | Data Sent | Key Required |
+|-------------|-----------|--------------|
+| `hn.algolia.com` | Search query | None (public API) |
+| `youtube.com` (via yt-dlp) | Channel URL | None (public) |
+
 ## Image Generation
 
 Hum can auto-generate post images using AI. Configure a provider and Hum will generate images during the `/hum create` workflow when an `image_prompt` is set.
+
+Set the active provider via the `HUM_IMAGE_MODEL` environment variable or `image_model` config key. Valid values: `gemini` (default), `openai`, `grok`, `minimax`.
 
 ### Providers
 
@@ -252,7 +243,7 @@ Choose the active provider in `openclaw.json` → `skills.entries.hum.config.ima
 }
 ```
 
-Or override with the `IMAGE_MODEL` environment variable.
+Or override with the `HUM_IMAGE_MODEL` environment variable.
 
 ### Visual Style
 

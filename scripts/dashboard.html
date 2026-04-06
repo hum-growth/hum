@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hum Feed</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f7f7f8;
+    --surface: #ffffff;
+    --surface2: #f3f4f6;
+    --border: #e5e7eb;
+    --border2: #d1d5db;
+    --text: #111827;
+    --muted: #9ca3af;
+    --muted2: #6b7280;
+    --accent: #6366f1;
+    --danger: #ef4444;
+    --tag-bg: #ede9fe;
+    --tag-text: #5b21b6;
+    --badge-x: #1d9bf0;
+    --badge-li: #0a66c2;
+    --badge-hn: #ff6600;
+    --badge-yt: #cc0000;
+    --badge-web: #6b7280;
+    font-size: 14px;
+  }
+
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── Top bar ── */
+  #topbar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  #topbar h1 { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: -0.01em; }
+  #topbar .divider { width: 1px; height: 18px; background: var(--border); }
+  #status-label { font-size: 12px; color: var(--muted2); }
+  .spacer { flex: 1; }
+  #open-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 5px 13px; font-size: 12px; font-weight: 500; cursor: pointer; display: none; }
+  #open-btn:hover { background: #5558e3; }
+  #reload-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  #reload-btn:hover { border-color: var(--border2); color: var(--text); }
+
+  /* ── Layout ── */
+  #layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Feed panel ── */
+  #feed-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  #filter-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  #filter-bar label { font-size: 12px; color: var(--muted2); }
+  #filter-bar select, #filter-bar input[type=text] { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 4px 8px; font-size: 12px; outline: none; }
+  #filter-bar select:focus, #filter-bar input:focus { border-color: var(--accent); }
+  #feed-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  #feed-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #feed-list::-webkit-scrollbar { width: 6px; }
+  #feed-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+  .feed-item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; display: flex; flex-direction: column; gap: 7px; transition: box-shadow .15s; }
+  .feed-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); border-color: var(--border2); }
+
+  .item-header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .source-badge { font-size: 10px; font-weight: 700; border-radius: 4px; padding: 2px 6px; text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; color: #fff; }
+  .badge-x { background: var(--badge-x); }
+  .badge-linkedin { background: var(--badge-li); }
+  .badge-hn { background: var(--badge-hn); }
+  .badge-youtube { background: var(--badge-yt); }
+  .badge-web, .badge-website { background: var(--badge-web); }
+
+  .item-author { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+  a.item-author:hover { color: var(--accent); text-decoration: underline; }
+  .item-handle { font-weight: 400; color: var(--muted2); }
+  .item-time { font-size: 11px; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+  .item-text { font-size: 13px; line-height: 1.6; color: #374151; white-space: pre-wrap; word-break: break-word; }
+  .item-text.collapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .expand-btn { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; align-self: flex-start; padding: 0; }
+  .expand-btn:hover { text-decoration: underline; }
+
+  .item-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { background: var(--tag-bg); color: var(--tag-text); font-size: 11px; border-radius: 4px; padding: 2px 7px; font-weight: 500; }
+
+  .item-stats { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 10px; color: var(--muted2); text-align: center; padding: 32px; }
+  .empty-state .icon { font-size: 32px; }
+  .empty-state p { font-size: 13px; line-height: 1.5; }
+  .empty-state code { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 12px; color: var(--text); }
+
+  /* ── Sources sidebar ── */
+  #sources-panel { width: 290px; border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+
+  #sources-header { padding: 9px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  #sources-header h2 { font-size: 13px; font-weight: 600; }
+  #sources-count { font-size: 11px; color: var(--muted); }
+  #edit-btn { margin-left: auto; background: none; border: 1px solid var(--border); color: var(--muted2); border-radius: 5px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+  #edit-btn:hover { border-color: var(--border2); color: var(--text); }
+  #edit-btn.active { background: #ede9fe; border-color: var(--accent); color: var(--accent); }
+
+  #sources-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+  #sources-list::-webkit-scrollbar { width: 4px; }
+  #sources-list::-webkit-scrollbar-thumb { background: var(--border2); }
+
+  .source-group-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 14px 3px; }
+  .source-row { display: flex; align-items: center; gap: 7px; padding: 5px 14px; cursor: pointer; }
+  .source-row:hover { background: var(--surface2); }
+  .source-row.active { background: #ede9fe; }
+  .source-name { font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .source-row.active .source-name { color: var(--accent); font-weight: 500; }
+  .source-crawled { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .source-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; flex-shrink: 0; opacity: 0; display: none; }
+  .source-row:hover .source-del.visible { opacity: 1; }
+  .source-del.visible { display: block; }
+  .source-del:hover { color: var(--danger); }
+
+  #add-source-form { border-top: 1px solid var(--border); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+  #add-source-form h3 { font-size: 11px; font-weight: 600; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.04em; }
+  #add-source-form select, #add-source-form input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 5px 8px; font-size: 12px; width: 100%; outline: none; }
+  #add-source-form select:focus, #add-source-form input:focus { border-color: var(--accent); }
+  #add-source-form input::placeholder { color: var(--muted); }
+  #add-source-btn { background: var(--accent); color: #fff; border: none; border-radius: 5px; padding: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+  #add-source-btn:hover { background: #5558e3; }
+  #add-source-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  #add-err { font-size: 11px; color: var(--danger); display: none; }
+  #edit-notice { font-size: 11px; color: var(--muted2); text-align: center; padding: 4px 0; display: none; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>hum</h1>
+  <span class="divider"></span>
+  <span id="status-label">Loading…</span>
+  <div class="spacer"></div>
+  <button id="reload-btn">↺ Reload</button>
+  <button id="open-btn">Open directory</button>
+</div>
+
+<div id="layout">
+  <div id="feed-panel">
+    <div id="filter-bar">
+      <label>Source</label>
+      <select id="filter-source"><option value="">All</option></select>
+      <label>Search</label>
+      <input type="text" id="filter-text" placeholder="Filter by text or author…" style="width:200px">
+      <span id="feed-count"></span>
+    </div>
+    <div id="feed-list">
+      <div class="empty-state"><span class="icon">⏳</span><p>Loading feed…</p></div>
+    </div>
+  </div>
+
+  <div id="sources-panel">
+    <div id="sources-header">
+      <h2>Sources</h2>
+      <span id="sources-count"></span>
+      <button id="edit-btn" title="Enable editing to add/remove sources">Edit</button>
+    </div>
+    <div id="sources-list"></div>
+    <div id="add-source-form">
+      <h3>Add source</h3>
+      <select id="add-type">
+        <option value="x_feed">X — home feed</option>
+        <option value="x_profile">X — individual profile</option>
+        <option value="linkedin_feed">LinkedIn — home feed</option>
+        <option value="linkedin">LinkedIn — individual profile</option>
+        <option value="youtube">YouTube channel</option>
+        <option value="website">Website</option>
+      </select>
+      <input type="text" id="add-value" placeholder="@handle or profile URL">
+      <input type="text" id="add-extra" placeholder="Category / display name (optional)">
+      <button id="add-source-btn" disabled>Add source</button>
+      <span id="edit-notice">Enable editing to save changes</span>
+      <span id="add-err"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let dirHandle = null;  // File System Access API handle (for writes)
+let feedItems = [];
+let sources = { feed_sources: [] };
+let editMode = false;  // true once write access is granted
+
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const statusLabel = document.getElementById('status-label');
+const openBtn = document.getElementById('open-btn');
+const reloadBtn = document.getElementById('reload-btn');
+const feedList = document.getElementById('feed-list');
+const feedCount = document.getElementById('feed-count');
+const filterSource = document.getElementById('filter-source');
+const filterText = document.getElementById('filter-text');
+const sourcesList = document.getElementById('sources-list');
+const sourcesCount = document.getElementById('sources-count');
+const editBtn = document.getElementById('edit-btn');
+const addTypeEl = document.getElementById('add-type');
+const addValueEl = document.getElementById('add-value');
+const addExtraEl = document.getElementById('add-extra');
+const addSourceBtn = document.getElementById('add-source-btn');
+const addErr = document.getElementById('add-err');
+const editNotice = document.getElementById('edit-notice');
+
+const hasFSA = 'showDirectoryPicker' in window;
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  loadViaFetch();
+  // If fetch likely won't work (file:// protocol), show open button immediately
+  if (window.location.protocol === 'file:') {
+    openBtn.style.display = 'block';
+  }
+});
+
+// ── Load via fetch (auto, when served over HTTP) ───────────────────────────
+async function loadViaFetch() {
+  try {
+    const [feedsRes, sourcesRes] = await Promise.all([
+      fetch('feed/feeds.json'),
+      fetch('feed/sources.json'),
+    ]);
+    if (!feedsRes.ok || !sourcesRes.ok) throw new Error('Files not found');
+    const rawFeeds = await feedsRes.json();
+    feedItems = Array.isArray(rawFeeds) ? rawFeeds : (rawFeeds.items || []);
+    sources = await sourcesRes.json();
+    if (!sources.feed_sources) sources.feed_sources = [];
+    statusLabel.textContent = `${feedItems.length} items · ${sources.feed_sources.length} sources`;
+    rebuildFilterDropdown();
+    renderSources();
+    renderFeed();
+    openBtn.style.display = 'none';
+    editNotice.style.display = editMode ? 'none' : 'block';
+  } catch {
+    // fetch failed — likely file:// protocol or wrong directory
+    if (!dirHandle) {
+      statusLabel.textContent = 'Open a feed directory to continue';
+      feedList.innerHTML = `<div class="empty-state">
+        <span class="icon">📂</span>
+        <p>Click <strong>Open directory</strong> to select your <code>HUM_DATA_DIR</code> folder.<br><br>
+        Or serve over HTTP: <code>python3 -m http.server 8080</code><br>in your <code>HUM_DATA_DIR</code> directory.</p>
+      </div>`;
+      if (hasFSA) openBtn.style.display = 'block';
+    }
+  }
+}
+
+reloadBtn.addEventListener('click', () => {
+  if (dirHandle) loadViaFSA();
+  else loadViaFetch();
+});
+
+// ── File System Access API (fallback for file:// + writes) ─────────────────
+openBtn.addEventListener('click', async () => {
+  if (!hasFSA) {
+    alert('Your browser does not support the File System Access API.\nUse Chrome or Edge, or serve this file over HTTP.');
+    return;
+  }
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    editMode = true;
+    editBtn.textContent = 'Editing';
+    editBtn.classList.add('active');
+    addSourceBtn.disabled = false;
+    editNotice.style.display = 'none';
+    openBtn.style.display = 'none';
+    await loadViaFSA();
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error(e);
+  }
+});
+
+async function loadViaFSA() {
+  if (!dirHandle) return;
+  try {
+    feedItems = await readJsonFSA('feeds.json');
+    if (!Array.isArray(feedItems)) feedItems = feedItems.items || [];
+  } catch { feedItems = []; }
+  try {
+    sources = await readJsonFSA('sources.json');
+    if (!sources.feed_sources) sources.feed_sources = [];
+  } catch { sources = { feed_sources: [] }; }
+  statusLabel.textContent = `${feedItems.length} items · ${sources.feed_sources.length} sources · ${dirHandle.name}`;
+  rebuildFilterDropdown();
+  renderSources();
+  renderFeed();
+}
+
+async function getFeedDirHandle() {
+  // Try data_dir/feed/ first, fall back to dirHandle itself (if already in feed/)
+  try {
+    return await dirHandle.getDirectoryHandle('feed');
+  } catch {
+    return dirHandle;
+  }
+}
+
+async function readJsonFSA(name) {
+  const dir = await getFeedDirHandle();
+  const fh = await dir.getFileHandle(name);
+  const file = await fh.getFile();
+  return JSON.parse(await file.text());
+}
+
+async function writeJsonFSA(name, data) {
+  const dir = await getFeedDirHandle();
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify(data, null, 2) + '\n');
+  await w.close();
+}
+
+// ── Enable editing (for HTTP-served mode) ─────────────────────────────────
+editBtn.addEventListener('click', async () => {
+  if (editMode) return;
+  if (!hasFSA) { alert('File System Access API required (Chrome/Edge) for editing.'); return; }
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    editMode = true;
+    editBtn.textContent = 'Editing';
+    editBtn.classList.add('active');
+    addSourceBtn.disabled = false;
+    editNotice.style.display = 'none';
+    renderSources(); // re-render to show delete buttons
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error(e);
+  }
+});
+
+// ── Filter ────────────────────────────────────────────────────────────────
+function rebuildFilterDropdown() {
+  const sourceSet = new Set(feedItems.map(i => i.source).filter(Boolean));
+  filterSource.innerHTML = '<option value="">All</option>';
+  [...sourceSet].sort().forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s.replace(/_/g, ' ');
+    filterSource.appendChild(o);
+  });
+}
+
+filterSource.addEventListener('change', renderFeed);
+filterText.addEventListener('input', renderFeed);
+
+// ── Feed rendering ─────────────────────────────────────────────────────────
+function renderFeed() {
+  const src = filterSource.value;
+  const q = filterText.value.toLowerCase();
+  let items = feedItems;
+  if (src) items = items.filter(i => i.source === src);
+  if (q) items = items.filter(i =>
+    (i.text || '').toLowerCase().includes(q) ||
+    (i.author || '').toLowerCase().includes(q) ||
+    (i.display_name || '').toLowerCase().includes(q) ||
+    (i.title || '').toLowerCase().includes(q)
+  );
+
+  feedCount.textContent = `${items.length.toLocaleString()} item${items.length !== 1 ? 's' : ''}`;
+
+  if (!items.length) {
+    feedList.innerHTML = `<div class="empty-state"><span class="icon">🔍</span><p>${
+      feedItems.length ? 'No items match the filter.' : 'No feed items yet — run <code>/hum refresh-feed</code>'
+    }</p></div>`;
+    return;
+  }
+
+  feedList.innerHTML = '';
+  items.forEach(item => feedList.appendChild(buildFeedItem(item)));
+}
+
+function buildFeedItem(item) {
+  const el = document.createElement('div');
+  el.className = 'feed-item';
+
+  const src = item.source || 'unknown';
+  const author = item.display_name || item.author || item.title || '—';
+  const handle = (item.author && item.author !== author) ? ' ' + item.author : '';
+  const ts = formatTime(item.timestamp || item.published_at || item.date);
+  const url = item.url || item.link || null;
+  const text = item.text || item.summary || '';
+  const topics = Array.isArray(item.topics) ? item.topics : [];
+  const long = text.length > 240;
+
+  const badgeClass = 'badge-' + src;
+
+  el.innerHTML = `
+    <div class="item-header">
+      <span class="source-badge ${badgeClass}">${src.replace(/_/g, '\u00a0')}</span>
+      ${url
+        ? `<a class="item-author" href="${esc(url)}" target="_blank" rel="noopener">${esc(author)}${handle ? `<span class="item-handle"> ${esc(handle)}</span>` : ''}</a>`
+        : `<span class="item-author">${esc(author)}${handle ? `<span class="item-handle"> ${esc(handle)}</span>` : ''}</span>`}
+      <span class="item-time">${esc(ts)}</span>
+    </div>
+    ${text ? `<div class="item-text${long ? ' collapsed' : ''}">${esc(text)}</div>` : ''}
+    ${long ? `<button class="expand-btn">Show more</button>` : ''}
+    ${topics.length ? `<div class="item-tags">${topics.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+    ${buildStats(item)}
+  `;
+
+  const btn = el.querySelector('.expand-btn');
+  const textEl = el.querySelector('.item-text');
+  if (btn && textEl) {
+    btn.addEventListener('click', () => {
+      const c = textEl.classList.toggle('collapsed');
+      btn.textContent = c ? 'Show more' : 'Show less';
+    });
+  }
+  return el;
+}
+
+function buildStats(item) {
+  const parts = [
+    item.likes != null && statChip('♥', item.likes),
+    item.retweets != null && statChip('↺', item.retweets),
+    item.replies != null && statChip('💬', item.replies),
+    item.views != null && statChip('👁', item.views),
+  ].filter(Boolean);
+  return parts.length ? `<div class="item-stats">${parts.join('')}</div>` : '';
+}
+
+function statChip(icon, val) { return `<span>${icon} ${fmtNum(val)}</span>`; }
+
+function fmtNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  if (typeof ts === 'string' && !/^\d{4}/.test(ts)) return ts;
+  try {
+    const diff = Date.now() - new Date(ts).getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+    return new Date(ts).toLocaleDateString();
+  } catch { return String(ts); }
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Sources rendering ──────────────────────────────────────────────────────
+const TYPE_LABELS = { x_feed: 'X Feed', x_profile: 'X Profiles', linkedin_feed: 'LinkedIn Feed', linkedin_profile: 'LinkedIn Profiles', youtube: 'YouTube', website: 'Websites' };
+const TYPE_ORDER = ['x_feed', 'x_profile', 'linkedin_feed', 'linkedin_profile', 'youtube', 'website'];
+const SINGLETON_TYPES = new Set(['x_feed', 'linkedin_feed']);
+
+function renderSources() {
+  const grouped = {};
+  TYPE_ORDER.forEach(t => grouped[t] = []);
+  sources.feed_sources.forEach(s => {
+    if (!grouped[s.type]) grouped[s.type] = [];
+    grouped[s.type].push(s);
+  });
+
+  sourcesCount.textContent = `(${sources.feed_sources.length})`;
+  sourcesList.innerHTML = '';
+
+  TYPE_ORDER.forEach(type => {
+    const items = grouped[type] || [];
+    if (!items.length) return;
+    const group = document.createElement('div');
+    group.innerHTML = `<div class="source-group-label">${TYPE_LABELS[type] || type}</div>`;
+    items.forEach(s => group.appendChild(buildSourceRow(s)));
+    sourcesList.appendChild(group);
+  });
+}
+
+function buildSourceRow(s) {
+  const row = document.createElement('div');
+  row.className = 'source-row';
+  const name = s.handle ? '@' + s.handle : (s.name || s.url || s.type);
+  const crawled = s.last_crawled ? formatTime(s.last_crawled) : 'never';
+  const delClass = 'source-del' + (editMode ? ' visible' : '');
+  row.innerHTML = `
+    <span class="source-name" title="${esc(s.url || s.handle || '')}">${esc(name)}</span>
+    <span class="source-crawled">${esc(crawled)}</span>
+    <button class="${delClass}" title="Remove">✕</button>
+  `;
+  row.querySelector('.source-del').addEventListener('click', async e => {
+    e.stopPropagation();
+    if (!editMode) return;
+    if (!confirm(`Remove ${name}?`)) return;
+    sources.feed_sources = sources.feed_sources.filter(x => x !== s);
+    await saveSources();
+    renderSources();
+    rebuildFilterDropdown();
+    renderFeed();
+  });
+  row.addEventListener('click', e => {
+    if (e.target.classList.contains('source-del')) return;
+    const key = s.handle || s.url || s.name || '';
+    const current = filterSource.value;
+    // Toggle filter for this source's type
+    const src = s.source || s.type;
+    filterSource.value = (current === src) ? '' : src;
+    renderFeed();
+  });
+  return row;
+}
+
+async function saveSources() {
+  if (!dirHandle) return;
+  await writeJsonFSA('sources.json', sources);
+}
+
+// ── Add source ─────────────────────────────────────────────────────────────
+addSourceBtn.addEventListener('click', async () => {
+  if (!editMode) return;
+  addErr.style.display = 'none';
+  const type = addTypeEl.value;
+  const value = addValueEl.value.trim();
+  const extra = addExtraEl.value.trim();
+
+  let entry = null;
+
+  if (SINGLETON_TYPES.has(type)) {
+    if (sources.feed_sources.some(s => s.type === type)) { showErr(TYPE_LABELS[type] + ' already added'); return; }
+    entry = { type, description: TYPE_LABELS[type] || type, last_crawled: null };
+  } else {
+    if (!value) { showErr('Enter a handle or URL'); return; }
+    if (type === 'x_profile') {
+      const handle = value.replace(/^@/, '').replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//, '').split('/')[0].split('?')[0];
+      if (!handle || !/^[A-Za-z0-9_]{1,50}$/.test(handle)) { showErr('Invalid X handle'); return; }
+      if (sources.feed_sources.some(s => s.type === 'x_profile' && s.handle?.toLowerCase() === handle.toLowerCase())) { showErr('@' + handle + ' already added'); return; }
+      entry = { type: 'x_profile', handle, category: extra, description: '', last_crawled: null };
+    } else if (type === 'linkedin') {
+      const clean = value.split('?')[0].replace(/\/$/, '');
+      if (!clean.includes('linkedin.com/in/')) { showErr('Enter a full LinkedIn profile URL'); return; }
+      if (sources.feed_sources.some(s => s.type === 'linkedin_profile' && s.url?.toLowerCase() === clean.toLowerCase())) { showErr('Profile already added'); return; }
+      const name = extra || clean.split('/in/')[1] || clean;
+      entry = { type: 'linkedin_profile', url: clean, name, category: '', description: '', last_crawled: null };
+    } else if (type === 'youtube') {
+      if (!value.includes('youtube.com') && !value.includes('youtu.be') && !value.startsWith('@')) { showErr('Enter a YouTube URL or @handle'); return; }
+      if (sources.feed_sources.some(s => s.type === 'youtube' && s.url === value)) { showErr('Already added'); return; }
+      const name = extra || (value.startsWith('@') ? value.slice(1) : value);
+      entry = { type: 'youtube', name, url: value, description: '', last_crawled: null };
+    } else if (type === 'website') {
+      if (!extra) { showErr('Put the URL in the second field'); return; }
+      if (sources.feed_sources.some(s => s.type === 'website' && s.name?.toLowerCase() === value.toLowerCase())) { showErr('Already added'); return; }
+      entry = { type: 'website', name: value, url: extra, last_crawled: null };
+    }
+  }
+
+  if (entry) {
+    sources.feed_sources.push(entry);
+    await saveSources();
+    addValueEl.value = ''; addExtraEl.value = '';
+    renderSources();
+    addErr.style.display = 'none';
+  }
+});
+
+function showErr(msg) { addErr.textContent = msg; addErr.style.display = 'block'; }
+
+addTypeEl.addEventListener('change', () => {
+  const t = addTypeEl.value;
+  const isSingleton = SINGLETON_TYPES.has(t);
+  addValueEl.style.display = isSingleton ? 'none' : '';
+  addExtraEl.style.display = isSingleton ? 'none' : '';
+  addValueEl.placeholder = { x_profile: '@handle or x.com/... URL', linkedin: 'https://linkedin.com/in/...', youtube: 'Channel URL or @handle', website: 'Site name' }[t] || '';
+  addExtraEl.placeholder = t === 'website' ? 'https://...' : 'Category / display name (optional)';
+  addErr.style.display = 'none';
+});
+addTypeEl.dispatchEvent(new Event('change'));
+
+// Show "edit notice" under add form when not in edit mode
+editNotice.style.display = editMode ? 'none' : 'block';
+</script>
+</body>
+</html>

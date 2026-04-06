@@ -4,8 +4,9 @@ Shared config loader for hum scripts.
 
 Resolution order for data_dir:
   1. HUM_DATA_DIR env var
-  2. openclaw.json → skills.entries.hum.config.data_dir (if running inside OpenClaw)
-  3. ~/Documents/hum (default)
+  2. openclaw.json → skills.entries.hum.config.hum_data_dir (if running inside OpenClaw)
+  3. openclaw.json → skills.entries.hum.config.data_dir (legacy fallback)
+  4. ~/Documents/hum (default)
 """
 import json
 import os
@@ -47,26 +48,27 @@ def load_config() -> dict:
     if env_dir:
         data_dir = Path(os.path.expanduser(env_dir))
     else:
-        # 2. Try openclaw.json
+        # 2. Try openclaw.json (hum_data_dir preferred, data_dir for legacy compat)
         data_dir = DEFAULT_DATA_DIR
-        raw = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("data_dir")
+        hum_cfg = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {})
+        raw = hum_cfg.get("hum_data_dir") or hum_cfg.get("data_dir")
         if raw:
             data_dir = Path(os.path.expanduser(raw))
 
     # Image model: env var → openclaw.json → default
-    image_model = os.environ.get("IMAGE_MODEL")
+    image_model = os.environ.get("HUM_IMAGE_MODEL")
     if not image_model:
         image_model = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("image_model")
     image_model = image_model or "gemini"
 
-    # Load API keys: env var → openclaw.json env.vars
-    scrapecreators_key = os.environ.get("SCRAPECREATORS_API_KEY")
-    if not scrapecreators_key:
-        scrapecreators_key = oc_data.get("env", {}).get("vars", {}).get("SCRAPECREATORS_API_KEY")
+    # Digest delivery target: env var → openclaw.json → None
+    hum_cfg = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {})
+    digest_target = os.environ.get("HUM_DIGEST_TARGET") or hum_cfg.get("hum_digest_target") or None
 
     return {
         "data_dir": data_dir,
         "image_model": image_model,
+        "digest_target": digest_target,
         "feed_dir": data_dir / "feed",
         "feeds_file": data_dir / "feed" / "feeds.json",
         "feed_raw": data_dir / "feed" / "raw",
@@ -76,7 +78,6 @@ def load_config() -> dict:
         "content_samples_dir": data_dir / "content-samples",
         "ideas_dir": data_dir / "ideas",
         "content_dir": data_dir / "content",
-        "scrapecreators_api_key": scrapecreators_key,
     }
 
 

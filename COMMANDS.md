@@ -188,7 +188,7 @@ To change, set environment variables or edit `openclaw.json`:
       "hum": {
         "enabled": true,
         "config": {
-          "data_dir": "~/Documents/hum",
+          "hum_data_dir": "~/Documents/hum",
           "image_model": "gemini"
         }
       }
@@ -419,7 +419,7 @@ Providers:
 3. `grok` — grok-2-image (xAI API)
 4. `minimax` — image-01
 
-Set the active provider in `openclaw.json` → `skills.entries.hum.config.image_model` or via the `IMAGE_MODEL` env var.
+Set the active provider in `openclaw.json` → `skills.entries.hum.config.image_model` or via the `HUM_IMAGE_MODEL` env var.
 
 ---
 

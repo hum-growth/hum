@@ -181,7 +181,19 @@ def main():
             path.write_text(json.dumps(seed, indent=2) + "\n", encoding="utf-8")
             print(f"  created {relpath}")
 
+    print()
+
+    # Copy feed.html viewer
+    dashboard_src = Path(__file__).resolve().parent / "dashboard.html"
+    dashboard_dst = data_dir / "dashboard.html"
+    if dashboard_dst.exists():
+        print(f"  exists  dashboard.html")
+    elif dashboard_src.exists():
+        dashboard_dst.write_bytes(dashboard_src.read_bytes())
+        print(f"  created dashboard.html")
+
     print(f"\nDone. Edit the files in {data_dir} to set up your profile.")
+    print(f"Open {data_dir}/dashboard.html in Chrome or Edge to browse your feed.")
 
 
 if __name__ == "__main__":

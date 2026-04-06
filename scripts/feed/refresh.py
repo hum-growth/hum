@@ -3,21 +3,20 @@
 refresh.py — Crawl feed sources and aggregate results.
 
 Orchestrates crawling across source types:
-  - x_browser: emits browser automation instructions (unchanged)
-  - x_profile: crawls via ScrapeCreators API
-  - linkedin_profile: crawls via ScrapeCreators API
-  - youtube: delegates to youtube.py (yt-dlp)
-  - website (HN): delegates to hn.py
+  - x_feed: emits browser automation instructions for X home feed
+  - x_profile: emits browser automation instructions for individual X profiles (incremental)
+  - linkedin_feed: emits browser automation instructions for LinkedIn home feed
+  - linkedin_profile: emits browser automation instructions for LinkedIn profiles (incremental)
+  - hn: fetches Hacker News stories via Algolia API
 
-Respects last_crawled per source for incremental updates.
-First-time crawls fetch up to 20 recent posts per account.
+Respects last_crawled per source for incremental updates (x_profile, linkedin_profile).
 
 Usage:
-    python3 refresh.py [--type x_browser|x_profile|linkedin_profile|all]
-    python3 refresh.py --type x_browser --scrolls 5
-    python3 refresh.py --type x_profile [--handles sama,karpathy]
+    python3 refresh.py [--type x_feed|x_profile|linkedin_feed|linkedin_profile|hn|all]
+    python3 refresh.py --type x_feed --scrolls 5
+    python3 refresh.py --type x_profile
     python3 refresh.py --type linkedin_profile
-    python3 refresh.py --thread <tweet_url>
+    python3 refresh.py --type hn
 """
 import argparse
 import json
@@ -30,203 +29,184 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.sources import load_sources, save_sources, get_by_type, update_last_crawled
-from feed.source.x import home_feed_instructions
-from feed.source.scrapecreators import (
-    fetch_x_profile_tweets,
-    fetch_x_thread,
-    fetch_linkedin_profile_posts,
-)
-from feed.source.x import classify
+from feed.source.x import home_feed_instructions, profile_instructions as x_profile_instructions
+from feed.source.linkedin import home_feed_instructions as linkedin_home_feed_instructions, profile_instructions as linkedin_profile_instructions
+from feed.source.hn import fetch_hn
 
 _CFG = load_config()
 DEFAULT_OUTPUT = str(_CFG["feeds_file"])
-FIRST_CRAWL_LIMIT = 20
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def refresh_x_browser(scrolls: int = 5, output: str | None = None) -> dict:
+def refresh_x_feed(scrolls: int = 5, output: str | None = None) -> dict:
     """Emit browser automation instructions for X home feed."""
     return home_feed_instructions(scrolls, output)
 
 
-def refresh_x_profiles(
-    sources: dict,
-    api_key: str,
-    handles: list[str] | None = None,
-    output_path: Path | None = None,
-) -> list[dict]:
-    """Crawl X profiles via ScrapeCreators API.
+def refresh_x_profiles(sources: dict, output_dir: Path | None = None) -> list[dict]:
+    """Emit browser automation instructions for all configured X profiles (incremental).
 
-    Returns aggregated feed items. Updates last_crawled per source.
+    Returns a list of instruction dicts, one per profile.
     """
     profiles = get_by_type(sources, "x_profile")
-    if handles:
-        handles_lower = {h.lower().lstrip("@") for h in handles}
-        profiles = [p for p in profiles if p["handle"].lower() in handles_lower]
+    if not profiles:
+        print("  No X profile sources configured.")
+        return []
 
-    all_items = []
+    results = []
     for p in profiles:
-        handle = p["handle"]
-        last_crawled = p.get("last_crawled")
-        limit = FIRST_CRAWL_LIMIT if not last_crawled else 100
-
-        print(f"  Crawling @{handle}...", end="", flush=True)
-        items = fetch_x_profile_tweets(
-            handle, api_key, since=last_crawled, limit=limit
-        )
-
-        # Classify topics
-        for item in items:
-            if "topics" not in item:
-                item["topics"] = classify(item.get("text", ""))
-
-        all_items.extend(items)
+        handle = p.get("handle", "")
+        if not handle:
+            continue
+        since = p.get("last_crawled")
+        out = str((output_dir or _CFG["feed_raw"]) / f"x_{handle}.json")
+        instr = x_profile_instructions(handle, out, since=since)
+        results.append(instr)
+        since_note = f" (since {since})" if since else " (first crawl)"
+        print(f"  Prepared instructions for: @{handle}{since_note}")
         update_last_crawled(sources, "x_profile", handle, _now_iso())
-        print(f" {len(items)} posts")
 
-    if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(all_items, indent=2, default=str))
-        print(f"  Saved {len(all_items)} x_profile items -> {output_path}")
-
-    return all_items
+    return results
 
 
-def refresh_linkedin_profiles(
-    sources: dict,
-    api_key: str,
-    output_path: Path | None = None,
-) -> list[dict]:
-    """Crawl LinkedIn profiles via ScrapeCreators API."""
+def refresh_linkedin_feed(scrolls: int = 5, output: str | None = None) -> dict:
+    """Emit browser automation instructions for LinkedIn home feed."""
+    return linkedin_home_feed_instructions(scrolls, output)
+
+
+def refresh_linkedin_profiles(sources: dict, output_dir: Path | None = None) -> list[dict]:
+    """Emit browser automation instructions for all configured LinkedIn profiles (incremental).
+
+    Returns a list of instruction dicts, one per profile.
+    """
     profiles = get_by_type(sources, "linkedin_profile")
     if not profiles:
         print("  No LinkedIn profile sources configured.")
         return []
 
-    all_items = []
+    results = []
     for p in profiles:
-        url = p["url"]
+        url = p.get("url", "")
         name = p.get("name", url)
-        last_crawled = p.get("last_crawled")
-        limit = FIRST_CRAWL_LIMIT if not last_crawled else 100
-
-        print(f"  Crawling {name}...", end="", flush=True)
-        items = fetch_linkedin_profile_posts(
-            url, api_key, since=last_crawled, limit=limit
-        )
-
-        # Classify topics
-        for item in items:
-            if "topics" not in item:
-                item["topics"] = classify(item.get("text", ""))
-
-        all_items.extend(items)
+        if not url:
+            continue
+        since = p.get("last_crawled")
+        out = str((output_dir or _CFG["feed_raw"]) / f"linkedin_{url.split('/in/')[-1].rstrip('/')}.json")
+        instr = linkedin_profile_instructions(url, out, since=since)
+        results.append(instr)
+        since_note = f" (since {since})" if since else " (first crawl)"
+        print(f"  Prepared instructions for: {name} ({url}){since_note}")
         update_last_crawled(sources, "linkedin_profile", url, _now_iso())
-        print(f" {len(items)} posts")
 
-    if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(all_items, indent=2, default=str))
-        print(f"  Saved {len(all_items)} linkedin_profile items -> {output_path}")
-
-    return all_items
+    return results
 
 
-def refresh_thread(tweet_url: str, api_key: str, output_path: Path | None = None) -> dict:
-    """Crawl a single tweet/thread via ScrapeCreators API."""
-    print(f"  Crawling thread: {tweet_url}...")
-    result = fetch_x_thread(tweet_url, api_key)
+def refresh_hn(
+    output_path: Path,
+    story_type: str = "both",
+    hits_per_page: int = 30,
+    days_back: int = 7,
+) -> list[dict]:
+    """Fetch HN stories via Algolia API and merge into feeds.json."""
+    items = fetch_hn(story_type, hits_per_page, days_back)
 
-    if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(result, indent=2, default=str))
-        print(f"  Saved thread -> {output_path}")
+    existing: list[dict] = []
+    if output_path.exists():
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
 
-    return result
+    non_hn = [p for p in existing if p.get("source") != "hn"]
+    merged = non_hn + items
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    print(f"  Fetched {len(items)} HN stories → {output_path}")
+    return items
 
 
 def main():
     parser = argparse.ArgumentParser(description="Refresh feed sources")
     parser.add_argument(
         "--type",
-        choices=["x_browser", "x_profile", "linkedin_profile", "all"],
+        choices=["x_feed", "x_profile", "linkedin_feed", "linkedin_profile", "hn", "all"],
         default="all",
         help="Source type to crawl (default: all)",
     )
-    parser.add_argument("--scrolls", type=int, default=5, help="Browser scrolls for x_browser")
+    parser.add_argument("--scrolls", type=int, default=5, help="Browser scrolls for x_feed and linkedin_feed")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON path")
-    parser.add_argument("--handles", default=None, help="Comma-separated X handles to crawl (x_profile only)")
-    parser.add_argument("--thread", default=None, help="Tweet URL to crawl as thread")
 
     args = parser.parse_args()
 
     cfg = _CFG
     sources_file = cfg["sources_file"]
     sources = load_sources(sources_file)
-    api_key = cfg.get("scrapecreators_api_key")
     raw_dir = cfg["feed_raw"]
 
-    # Thread mode
-    if args.thread:
-        if not api_key:
-            print("Error: SCRAPECREATORS_API_KEY required for thread crawling", file=sys.stderr)
-            sys.exit(1)
-        result = refresh_thread(args.thread, api_key, raw_dir / "thread.json")
-        print(json.dumps(result, indent=2, default=str))
-        return
-
     results = {}
-    counts: dict[str, int] = {}
 
-    # x_browser — always emits instructions, doesn't use API
-    if args.type in ("x_browser", "all"):
-        instructions = refresh_x_browser(args.scrolls, args.output)
-        results["x_browser"] = instructions
-        update_last_crawled(sources, "x_browser", "", _now_iso())
-        if args.type == "x_browser":
+    # x_feed — browser automation for X home feed
+    if args.type in ("x_feed", "all"):
+        instructions = refresh_x_feed(args.scrolls, args.output)
+        results["x_feed"] = instructions
+        update_last_crawled(sources, "x_feed", "", _now_iso())
+        if args.type == "x_feed":
             print(json.dumps(instructions, indent=2))
 
-    # x_profile — ScrapeCreators API
+    # x_profile — browser automation per configured X profile (incremental)
     if args.type in ("x_profile", "all"):
-        if not api_key:
-            print("Warning: SCRAPECREATORS_API_KEY not set, skipping x_profile crawl", file=sys.stderr)
-        else:
-            handles = args.handles.split(",") if args.handles else None
-            items = refresh_x_profiles(
-                sources, api_key, handles=handles,
-                output_path=raw_dir / "x_profile_feed.json",
-            )
-            results["x_profile"] = items
-            counts["x_profile"] = len(items)
+        instructions = refresh_x_profiles(sources, raw_dir)
+        results["x_profile"] = instructions
+        if args.type == "x_profile":
+            print(json.dumps(instructions, indent=2, default=str))
 
-    # linkedin_profile — ScrapeCreators API
+    # linkedin_feed — browser automation for LinkedIn home feed
+    if args.type in ("linkedin_feed", "all"):
+        instructions = refresh_linkedin_feed(args.scrolls, args.output)
+        results["linkedin_feed"] = instructions
+        update_last_crawled(sources, "linkedin_feed", "", _now_iso())
+        if args.type == "linkedin_feed":
+            print(json.dumps(instructions, indent=2))
+
+    # linkedin_profile — browser automation per configured LinkedIn profile (incremental)
     if args.type in ("linkedin_profile", "all"):
-        if not api_key:
-            print("Warning: SCRAPECREATORS_API_KEY not set, skipping linkedin_profile crawl", file=sys.stderr)
-        else:
-            items = refresh_linkedin_profiles(
-                sources, api_key,
-                output_path=raw_dir / "linkedin_feed.json",
-            )
-            results["linkedin_profile"] = items
-            counts["linkedin_profile"] = len(items)
+        instructions = refresh_linkedin_profiles(sources, raw_dir)
+        results["linkedin_profile"] = instructions
+        if args.type == "linkedin_profile":
+            print(json.dumps(instructions, indent=2, default=str))
+
+    # hn — fetch Hacker News stories via Algolia API and merge into feeds.json
+    if args.type in ("hn", "all"):
+        feeds_path = Path(args.output)
+        hn_items = refresh_hn(feeds_path)
+        results["hn"] = hn_items
+        update_last_crawled(sources, "website", "news.ycombinator.com", _now_iso())
+        if args.type == "hn":
+            print(json.dumps(hn_items, indent=2))
 
     # Save updated last_crawled timestamps
     save_sources(sources_file, sources)
 
-    # Summary
-    total = sum(counts.values())
-    print(f"\nRefresh complete. {total} new items across API sources.")
-    if counts:
-        for source, n in counts.items():
-            print(f"  {source}: {n} items")
-    if "x_browser" in results:
-        print("X browser instructions emitted — execute via browser tool.")
+    print(f"\nRefresh complete.")
+    browser_types = []
+    if "x_feed" in results:
+        browser_types.append("X feed")
+    if "x_profile" in results and results["x_profile"]:
+        browser_types.append(f"{len(results['x_profile'])} X profile(s)")
+    if "linkedin_feed" in results:
+        browser_types.append("LinkedIn feed")
+    if "linkedin_profile" in results and results["linkedin_profile"]:
+        browser_types.append(f"{len(results['linkedin_profile'])} LinkedIn profile(s)")
+    if browser_types:
+        print(f"Browser instructions emitted for: {', '.join(browser_types)} — execute via browser tool.")
+    if "hn" in results:
+        print(f"HN: {len(results['hn'])} stories merged into {args.output}.")
 
-    return counts
+    return results
 
 
 if __name__ == "__main__":

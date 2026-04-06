@@ -22,7 +22,7 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 
-SOURCE_TYPES = ("x_browser", "x_profile", "linkedin_profile", "youtube", "website")
+SOURCE_TYPES = ("x_feed", "x_profile", "linkedin_feed", "linkedin_profile", "youtube", "website")
 
 
 def load_sources(path: Path) -> dict:
@@ -59,7 +59,7 @@ def update_last_crawled(sources: dict, source_type: str, identifier: str, timest
             s["last_crawled"] = ts
         elif source_type == "youtube" and s.get("url", "").lower() == identifier.lower():
             s["last_crawled"] = ts
-        elif source_type == "x_browser":
+        elif source_type in ("x_feed", "linkedin_feed"):
             s["last_crawled"] = ts
 
 
@@ -74,8 +74,10 @@ def cmd_list(sources: dict, filter_type: str | None = None):
         print(f"=== {label} ({len(items)}) ===")
         for s in items:
             crawled = f" [crawled: {s['last_crawled']}]" if s.get("last_crawled") else " [never crawled]"
-            if st == "x_browser":
+            if st == "x_feed":
                 print(f"  {s.get('description', 'X home feed')}{crawled}")
+            elif st == "linkedin_feed":
+                print(f"  {s.get('description', 'LinkedIn home feed')}{crawled}")
             elif st == "x_profile":
                 cat = f" [{s['category']}]" if s.get("category") else ""
                 desc = f" -- {s['description']}" if s.get("description") else ""

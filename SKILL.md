@@ -35,7 +35,7 @@ The skill stores all data in a configurable directory. Set the `HUM_DATA_DIR` en
 export HUM_DATA_DIR=~/Documents/hum
 ```
 
-If not set, defaults to `~/Documents/hum`. When running inside OpenClaw, it also reads from `openclaw.json` → `skills.entries.hum.config.data_dir`.
+If not set, defaults to `~/Documents/hum`. When running inside OpenClaw, it also reads from `openclaw.json` → `skills.entries.hum.config.hum_data_dir` (or the legacy `data_dir` key for existing installs).
 
 ## Data Directory Structure
 
