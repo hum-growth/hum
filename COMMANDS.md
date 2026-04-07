@@ -45,7 +45,7 @@ Use `/opt/homebrew/bin/python3` for all script calls.
 **What it does:**
 Crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC — ranks items, sends a formatted digest via Telegram, and saves aggregated data to `<data_dir>/feed/feeds.json`.
 
-**This command is also triggered automatically by the "Morning Digest" cron job at 7:00am SGT daily.**
+**This command is also triggered automatically by the "Morning Digest" cron job at 6:00am SGT daily.**
 
 **Scrape sources:** See `<data_dir>/feed/sources.json` for all feed sources. Manage with `/hum sources`.
 
@@ -534,11 +534,7 @@ Default: `all` (both platforms). Specify `x` or `linkedin` to scope.
 ### Part 1 — Follow relevant accounts (X only)
 
 1. Open https://x.com in the OpenClaw browser using the user's active X account
-2. Search for 5–10 accounts in categories that the user's target audience would follow, using `<data_dir>/AUDIENCE.md` and `<data_dir>/CHANNELS.md` as the source of truth.
-   - **Finance thought leaders:** SecretCFO, OnlyCFO, The SaaS CFO, @CFOthoughts
-   - **AI/fintech:** @ttunguz (Tom Tunguz), @jasonlk, @a16z, @paulg
-   - **YC/startup:** @ycombinator, @ProductHunt
-   - **Finance media:** @CFOdive, @accountingtoday, @WSJmarkets
+2. Search for 5–10 accounts in categories that match the user's niche and audience, using `<data_dir>/AUDIENCE.md` and `<data_dir>/CHANNELS.md` as the source of truth. Derive the relevant topics, industries, and account types from those files — do not assume a specific niche.
 3. For each: navigate to their profile, click Follow if not already following
 4. Skip accounts already followed (check before clicking)
 5. Report: "Followed X new accounts: [list]"

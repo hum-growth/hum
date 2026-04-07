@@ -1,6 +1,8 @@
 ---
 name: hum
-description: Content writing and feed intelligence skill. Use when: (1) running the daily loop, (2) refreshing the daily news feed, (3) brainstorming topic ideas for posts, (4) drafting channel-specific posts, threads, or scripts, (5) managing the idea pipeline, (6) improving content strategy, (7) responding to comments on posts, (8) managing feed sources and preferences. Triggers: "hum loop", "daily loop", "morning loop", "write a post", "brainstorm topics", "draft something about X", "content ideas", "LinkedIn post", "X thread", "topic ideas", "respond to comments", "reply to comments", "check comments", "refresh feed", "morning digest", "run newsfeed", "Twitter digest", "add source", "remove source".
+description: Your AI content writer for X and LinkedIn. Hum handles the full content lifecycle: crawls your feed sources daily and sends a digest, brainstorms ideas grounded in real research across YouTube, X, Reddit, HN, and the web, then drafts posts in your voice using proven writing styles — from technical storytelling to contrarian takes. Every draft goes through a research → outline → approval loop before writing begins. Once approved, Hum publishes directly via API and manages engagement by drafting replies and suggesting accounts to follow.
+metadata:
+  version: 0.1.0
 
 1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md) and folders
 3. **Refresh feed** — `/hum refresh-feed` crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC; ranks items; sends a digest to Telegram; saves aggregated data to `feeds.json`
