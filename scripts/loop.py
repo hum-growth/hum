@@ -34,20 +34,40 @@ from config import load_config
 _CFG = load_config()
 
 
-def run_step(label: str, cmd: list[str], *, allow_fail: bool = False) -> int:
-    """Run a subprocess step, printing status."""
+def _loop_run_dir() -> Path:
+    """Return today's loop output directory: data_dir/loop/YYYY-MM-DD/."""
+    d = _CFG["loop_dir"] / datetime.now().strftime("%Y-%m-%d")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_step_output(step_name: str, text: str) -> None:
+    """Write a step's output to the loop run directory."""
+    if not text.strip():
+        return
+    out_file = _loop_run_dir() / f"{step_name}.md"
+    out_file.write_text(text, encoding="utf-8")
+    print(f"[loop] Saved {step_name} output → {out_file}", file=sys.stderr)
+
+
+def run_step(label: str, cmd: list[str], *, allow_fail: bool = False) -> tuple[int, str]:
+    """Run a subprocess step, printing status and returning captured stdout."""
     print(f"\n{'─' * 50}")
     print(f"▶ {label}")
     print(f"  {' '.join(cmd)}")
     print(f"{'─' * 50}")
-    result = subprocess.run(cmd, capture_output=False)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
     if result.returncode != 0 and not allow_fail:
         print(f"✗ {label} failed (exit {result.returncode})", file=sys.stderr)
-    return result.returncode
+    return result.returncode, result.stdout or ""
 
 
 def _write_run_summary(data_dir: Path, summary: dict) -> None:
-    """Write run summary to run_log.json (latest) and append to runs.jsonl (history)."""
+    """Write run summary to run_log.json (latest), runs.jsonl (history), and loop dir."""
     feed_dir = data_dir / "feed"
     feed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -64,6 +84,13 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
             f.write(json.dumps(summary) + "\n")
     except OSError as exc:
         print(f"[loop] Could not append to runs.jsonl: {exc}", file=sys.stderr)
+
+    # Also save summary to the loop run directory
+    try:
+        loop_summary = _loop_run_dir() / "summary.json"
+        loop_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"[loop] Could not write loop summary: {exc}", file=sys.stderr)
 
 
 # ── Step 1: Feed Digest ────────────────────────────────────────────────────
@@ -87,7 +114,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
 
     # Step 1a: Fetch Hacker News stories directly (Algolia API — no browser needed).
     # HN posts are merged into feeds_file so they appear in digest alongside X/PH.
-    run_step(
+    _, _ = run_step(
         "Fetch Hacker News stories (Algolia API)",
         [sys.executable, str(feed_dir / "source" / "hn.py"),
          "--days", str(days), "--output", hn_feed],
@@ -113,7 +140,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
 
     # Step 1b: Emit browser scraping instructions for X/Twitter feed.
     # The agent must execute these via browser tool and save to feeds_file.
-    run_step(
+    _, _ = run_step(
         "X/Twitter feed — browser instructions (agent must execute)",
         [sys.executable, str(feed_dir / "refresh.py"),
          "--output", feeds_file],
@@ -121,7 +148,7 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
 
     # Step 1d: Fetch YouTube creator updates (direct via yt-dlp).
     if not skip_youtube:
-        run_step(
+        _, _ = run_step(
             "Fetch YouTube creator updates",
             [sys.executable, str(feed_dir / "source" / "youtube.py"),
              "--file", sources_file, "--days", str(days),
@@ -130,19 +157,21 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
         )
 
     # Steps below depend on feeds_file being fully populated by the agent (X + PH).
-    run_step(
+    _, _ = run_step(
         "Rank and score posts",
         [sys.executable, str(feed_dir / "ranker.py"),
          "--input", feeds_file, "--output", ranked_feed],
         allow_fail=True,
     )
 
-    run_step(
+    _, digest_output = run_step(
         "Format digest",
         [sys.executable, str(feed_dir / "digest.py"),
          "--input", feeds_file, "--youtube-input", youtube_feed,
          "--max-posts", str(max_posts)],
     )
+
+    _save_step_output("digest", digest_output)
 
 
 # ── Step 2: Engage ─────────────────────────────────────────────────────────
@@ -153,20 +182,26 @@ def run_engage():
 
     Outputs structured suggestions for the agent to present to the user.
     """
-    print("\n" + "═" * 50)
-    print("💬 ENGAGEMENT SUGGESTIONS")
-    print("═" * 50)
-    print()
-    print("Review your recent posts on X and LinkedIn for new comments/replies.")
-    print("Check feed sources for high-value accounts to follow.")
-    print()
-    print("Actions for the agent:")
-    print("  1. Open X and LinkedIn in browser")
-    print("  2. Check recent posts for unanswered comments")
-    print("  3. Draft reply suggestions for user approval")
-    print("  4. Suggest 3-5 new accounts to follow based on feed sources")
-    print()
-    print("Present all suggestions and wait for user approval before acting.")
+    lines = [
+        "",
+        "═" * 50,
+        "💬 ENGAGEMENT SUGGESTIONS",
+        "═" * 50,
+        "",
+        "Review your recent posts on X and LinkedIn for new comments/replies.",
+        "Check feed sources for high-value accounts to follow.",
+        "",
+        "Actions for the agent:",
+        "  1. Open X and LinkedIn in browser",
+        "  2. Check recent posts for unanswered comments",
+        "  3. Draft reply suggestions for user approval",
+        "  4. Suggest 3-5 new accounts to follow based on feed sources",
+        "",
+        "Present all suggestions and wait for user approval before acting.",
+    ]
+    text = "\n".join(lines)
+    print(text)
+    _save_step_output("engage", text)
 
 
 # ── Step 3: Brainstorm ─────────────────────────────────────────────────────
@@ -179,21 +214,27 @@ def run_brainstorm():
     """
     create_dir = _SCRIPTS_ROOT / "create"
 
-    run_step(
+    _, brainstorm_output = run_step(
         "Filter feed for brainstorm ideas",
         [sys.executable, str(create_dir / "brainstorm.py"), "--max", "8"],
         allow_fail=True,
     )
 
-    print("\n" + "═" * 50)
-    print("💡 CONTENT BRAINSTORM")
-    print("═" * 50)
-    print()
-    print("Actions for the agent:")
-    print("  1. Present the top feed items above as inspiration")
-    print("  2. Ask: 'Any topics you want to add to the pipeline?'")
-    print("  3. Ask: 'Want to work on any posts today?'")
-    print("  4. If yes, run /hum create for the chosen idea")
+    lines = [
+        "",
+        "═" * 50,
+        "💡 CONTENT BRAINSTORM",
+        "═" * 50,
+        "",
+        "Actions for the agent:",
+        "  1. Present the top feed items above as inspiration",
+        "  2. Ask: 'Any topics you want to add to the pipeline?'",
+        "  3. Ask: 'Want to work on any posts today?'",
+        "  4. If yes, run /hum create for the chosen idea",
+    ]
+    text = "\n".join(lines)
+    print(text)
+    _save_step_output("brainstorm", brainstorm_output + text)
 
 
 # ── Step 4: Learn (Sundays only) ──────────────────────────────────────────
@@ -204,16 +245,22 @@ def run_learn():
 
     Outputs instructions for the agent to execute the /learn command.
     """
-    print("\n" + "═" * 50)
-    print("📚 WEEKLY LEARN (Sunday)")
-    print("═" * 50)
-    print()
-    print("Actions for the agent:")
-    print("  1. Run the /hum learn command as defined in COMMANDS.md")
-    print("  2. Analyze feed trends and top-performing content")
-    print("  3. Research what X and LinkedIn algorithms currently favor")
-    print("  4. Update context files based on findings")
-    print("  5. Share key findings and recommended actions with the user")
+    lines = [
+        "",
+        "═" * 50,
+        "📚 WEEKLY LEARN (Sunday)",
+        "═" * 50,
+        "",
+        "Actions for the agent:",
+        "  1. Run the /hum learn command as defined in COMMANDS.md",
+        "  2. Analyze feed trends and top-performing content",
+        "  3. Research what X and LinkedIn algorithms currently favor",
+        "  4. Update context files based on findings",
+        "  5. Share key findings and recommended actions with the user",
+    ]
+    text = "\n".join(lines)
+    print(text)
+    _save_step_output("learn", text)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
