@@ -84,7 +84,8 @@ def is_seen(post: dict, history: dict) -> bool:
     url = post.get("url", "")
     if url and url in history:
         return True
-    # Story-level fingerprint check: if 6+ words overlap with a seen fingerprint, skip
+    # Story-level fingerprint check: require strong overlap (7+ words) to avoid
+    # flagging legitimately different stories that share a few common words
     fp = make_story_fingerprint(post.get("text", ""))
     fp_words = set(fp.split())
     if len(fp_words) >= 4:
@@ -92,7 +93,7 @@ def is_seen(post: dict, history: dict) -> bool:
             if key.startswith("fp:"):
                 seen_words = set(key[3:].split())
                 overlap = fp_words & seen_words
-                if len(overlap) >= min(4, len(fp_words) - 1):
+                if len(overlap) >= min(7, len(fp_words) - 1):
                     return True
     return False
 
@@ -142,12 +143,14 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
     counter = 1
     digest_map = {}
     labels = {"ai_monetize": "💰 AI Monetization", "AI": "🤖 AI", "startup": "🚀 Startups", "crypto": "🪙 Crypto"}
+
+    # First pass: topic-sections (show up to 3 per topic)
     for topic, label in labels.items():
         items = by_topic.get(topic, [])
         if not items:
             continue
         lines.append(f"\n*{label}*")
-        for p in items[:4]:
+        for p in items[:3]:
             author = p.get("author", "")
             url = p.get("url", "")
             if p.get("source") == "youtube":
@@ -166,6 +169,28 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
             digest_map[str(counter)] = p
             counter += 1
             mark_seen(p, history)
+
+    # Fallback: show untagged posts if topic sections are empty
+    untagged = [p for p in fresh_posts if p.get("url", "") not in seen_urls]
+    if untagged:
+        lines.append(f"\n*📌 General*")
+        for p in untagged[:6]:
+            author = p.get("author", "") or p.get("channel_name", "")
+            url = p.get("url", "")
+            if p.get("source") == "youtube":
+                title = truncate(p.get("title", ""), 110)
+                published = p.get("published", "")
+                date_suffix = f" ({published})" if published else ""
+                lines.append(f"{counter}. ▶ {author}: {title}{date_suffix}")
+            else:
+                text = truncate(p.get("text", "") or p.get("title", ""))
+                lines.append(f"{counter}. {author}: {text}")
+            if url:
+                lines.append(f"   {url}")
+            digest_map[str(counter)] = p
+            counter += 1
+            mark_seen(p, history)
+            seen_urls.add(p.get("url", ""))
 
     if skipped > 0:
         lines.append(f"\n_(Filtered {skipped} repeated/similar post{'s' if skipped != 1 else ''} from prior feeds)_")

@@ -1,13 +1,6 @@
 ---
 name: hum
 description: Content writing and feed intelligence skill. Use when: (1) running the daily loop, (2) refreshing the daily news feed, (3) brainstorming topic ideas for posts, (4) drafting channel-specific posts, threads, or scripts, (5) managing the idea pipeline, (6) improving content strategy, (7) responding to comments on posts, (8) managing feed sources and preferences. Triggers: "hum loop", "daily loop", "morning loop", "write a post", "brainstorm topics", "draft something about X", "content ideas", "LinkedIn post", "X thread", "topic ideas", "respond to comments", "reply to comments", "check comments", "refresh feed", "morning digest", "run newsfeed", "Twitter digest", "add source", "remove source".
----
-
-# Hum
-
-Ghostwrites social content — from feed intelligence through topic ideation to final draft and publishing.
-
-## How It Works
 
 1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md) and folders
 3. **Refresh feed** — `/hum refresh-feed` crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC; ranks items; sends a digest to Telegram; saves aggregated data to `feeds.json`
@@ -16,7 +9,7 @@ Ghostwrites social content — from feed intelligence through topic ideation to 
 6. **Learn** — `/hum learn` analyzes feed trends and platform algorithms, updates context files
 7. **Manage ideas** — `/hum ideas` shows the pipeline (pending → approved → drafted → published)
 8. **Review drafts** — `/hum content` lists current saved draft files and generated assets
-⚠️ **Always follow the create flow: research → outline → approval → draft. Do not produce a draft without an approved outline.**
+⚠️ **Always use /hum create and read `VOICE.md` + `content-samples/` when drafting posts. Follow the create flow: research → outline → approval → draft. Do not produce a draft without an approved outline.**
 9. **Draft posts** — `/hum create [platform] [type] [idea]` follows a strict 4-step process:
    - **Step 1 — Load context**: read VOICE.md, CHANNELS.md, content-samples/, knowledge/, the idea from ideas.json
    - **Step 2 — Research**: 3-5 web searches (core topic, stats, contrarian, examples, adjacents); build a fact base; present findings
