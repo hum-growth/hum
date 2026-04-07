@@ -20,7 +20,7 @@ git clone https://github.com/hum-growth/hum ~/.claude/skills/hum
 ### OpenClaw / ClawHub
 
 ```bash
-claw install hum
+claw install hum-writer
 ```
 
 ### Codex
@@ -326,5 +326,5 @@ This makes both paths point to the same files. Edits you make in `~/.openclaw/wo
 
 To ship your changes, use the `/ship` command in Claude Code, which commits, pushes, and opens a PR following conventional commit conventions. See `.claude/commands/ship.md` for details.
 
-Once pushed, anyone can install the updated skill via `claude /install`, `claw install hum`, etc.
+Once pushed, anyone can install the updated skill via `claude /install`, `claw install hum-writer`, etc.
 
