@@ -255,20 +255,6 @@ All feed sources use browser automation — the agent scrolls and extracts conte
 | **Hacker News** | Algolia public API | None | Free |
 | **Product Hunt** | Browser scrolling | None (browser session) | Free |
 
-### Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
-| `HUM_DIGEST_TARGET` | *(from openclaw.json)* | Delivery target for morning digest (e.g. `telegram:123456789`) |
-
-### Data that leaves your machine
-
-| Destination | Data Sent | Key Required |
-|-------------|-----------|--------------|
-| `hn.algolia.com` | Search query | None (public API) |
-| `youtube.com` (via yt-dlp) | Channel URL | None (public) |
-
 ## Image Generation
 
 Hum can auto-generate post images using AI. Configure a provider and Hum will generate images during the `/hum create` workflow when an `image_prompt` is set.
