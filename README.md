@@ -172,6 +172,77 @@ Runs at 6am SGT via `scripts/loop.py`. Sundays include an extra strategy refresh
 
 Run individual steps with `python3 scripts/loop.py --step digest|engage|brainstorm|learn`.
 
+### Scheduling the Daily Loop
+
+The daily loop needs a cron job or scheduler to run automatically. Setup varies by platform.
+
+#### OpenClaw
+
+OpenClaw has built-in scheduling. Add a `cron` entry to your `openclaw.json`:
+
+```json
+{
+  "skills": {
+    "entries": {
+      "hum": {
+        "cron": "0 6 * * *",
+        "config": {
+          "hum_data_dir": "~/Documents/hum"
+        }
+      }
+    }
+  }
+}
+```
+
+This runs `/hum refresh-feed` → engage → brainstorm at 6am daily. OpenClaw handles process management, retries, and logging.
+
+#### Claude Code
+
+Claude Code does not have built-in scheduling. Use a system crontab to invoke the CLI in non-interactive mode:
+
+```bash
+# Edit your crontab
+crontab -e
+
+# Add this line (runs at 6am daily)
+0 6 * * * cd /path/to/hum && claude -p "Run the daily hum loop: python3 scripts/loop.py" --allowedTools "Bash(command)" 2>&1 >> ~/.hum/loop.log
+```
+
+Alternatively, use the `/loop` skill if available in your Claude Code session:
+```
+/loop 24h /hum refresh-feed
+```
+
+> **Note:** The crontab approach requires Claude Code CLI (`claude`) to be installed and authenticated. The session runs headless — browser-based feed sources (X, LinkedIn, Product Hunt) will be skipped unless a browser session is available.
+
+#### Codex
+
+Use a system crontab to invoke the Codex CLI:
+
+```bash
+0 6 * * * cd /path/to/hum && codex -q "Run the daily hum loop: python3 scripts/loop.py" 2>&1 >> ~/.hum/loop.log
+```
+
+#### Gemini CLI
+
+Use a system crontab to invoke the Gemini CLI:
+
+```bash
+0 6 * * * cd /path/to/hum && gemini -p "Run the daily hum loop: python3 scripts/loop.py" 2>&1 >> ~/.hum/loop.log
+```
+
+#### All platforms — manual run
+
+You can always run the loop manually inside any agent session:
+```
+/hum refresh-feed
+```
+Or run the Python script directly:
+```bash
+python3 scripts/loop.py
+```
+
 ## Feed
 
 All feed sources use browser automation — the agent scrolls and extracts content via the browser tool. No API keys are required for feed crawling.
@@ -183,20 +254,6 @@ All feed sources use browser automation — the agent scrolls and extracts conte
 | **YouTube** | yt-dlp (local tool) | None | Free |
 | **Hacker News** | Algolia public API | None | Free |
 | **Product Hunt** | Browser scrolling | None (browser session) | Free |
-
-### Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
-| `HUM_DIGEST_TARGET` | *(from openclaw.json)* | Delivery target for morning digest (e.g. `telegram:123456789`) |
-
-### Data that leaves your machine
-
-| Destination | Data Sent | Key Required |
-|-------------|-----------|--------------|
-| `hn.algolia.com` | Search query | None (public API) |
-| `youtube.com` (via yt-dlp) | Channel URL | None (public) |
 
 ## Image Generation
 
