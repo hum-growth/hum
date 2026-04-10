@@ -78,6 +78,9 @@ def load_config() -> dict:
         "content_samples_dir": data_dir / "content-samples",
         "ideas_dir": data_dir / "ideas",
         "content_dir": data_dir / "content",
+        "content_drafts_dir": data_dir / "content" / "drafts",
+        "content_published_dir": data_dir / "content" / "published",
+        "content_images_dir": data_dir / "content" / "images",
         "loop_dir": data_dir / "loop",
     }
 

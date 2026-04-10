@@ -215,7 +215,7 @@ def main() -> None:
     parser.add_argument("--type", choices=["front_page", "show_hn", "both"], default="both")
     parser.add_argument("--hits-per-page", type=int, default=30)
     parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--output", default=str(_CFG["feed_dir"] / "hn_feed.json"))
+    parser.add_argument("--output", default=str(_CFG["feed_raw"] / "hn_feed.json"))
     args = parser.parse_args()
 
     print(f"[HN] Fetching — {args.type}, last {args.days} days...", file=sys.stderr)

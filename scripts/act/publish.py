@@ -6,9 +6,9 @@ Connectors handle the transport layer (API vs CDP relay browser).
 This script handles draft parsing, preview, and metadata updates.
 
 Examples:
-  python3 publish.py --draft "../content/X - Example.md" --publish
-  python3 publish.py --draft "../content/LinkedIn - Example.md" --image /tmp/post.png --publish
-  python3 publish.py --draft "../content/X - Example.md" --platform x --account <account>
+  python3 publish.py --draft "../content/drafts/X - Example.md" --publish
+  python3 publish.py --draft "../content/drafts/LinkedIn - Example.md" --image /tmp/post.png --publish
+  python3 publish.py --draft "../content/drafts/X - Example.md" --platform x --account <account>
 """
 
 from __future__ import annotations
@@ -196,11 +196,16 @@ def main() -> None:
         result = connector.post(commentary, args.account, args.image)
         external_id = result.get("post_urn", "")
 
-    # Update draft metadata
+    # Update draft metadata and move to published/
     if args.update_draft:
         url = result.get("url", "")
         if url and external_id:
             upsert_publish_metadata(draft_path, platform, url, external_id)
+        published_dir = draft_path.parent.parent / "published"
+        if published_dir.is_dir():
+            dest = published_dir / draft_path.name
+            draft_path.rename(dest)
+            print(f"[publish] Moved to {dest}", file=sys.stderr)
 
     print(json.dumps(result, indent=2))
 

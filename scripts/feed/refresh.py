@@ -46,14 +46,14 @@ def _now_iso() -> str:
 
 
 def write_feed_source_config(cfg: dict, sources: dict) -> None:
-    """Write feed_source_config.json with per-source settings (e.g. prefer_articles) for the ranker."""
+    """Write feed_source_config.json with per-source settings (e.g. prefer_longform) for the ranker."""
     config = {}
     for source_type in ("x_feed", "linkedin_feed"):
         entries = get_by_type(sources, source_type)
         if entries:
             entry = entries[0]
             config[source_type] = {
-                "prefer_articles": entry.get("prefer_articles", False)
+                "prefer_longform": entry.get("prefer_longform", False)
             }
     config_path = Path(cfg["feed_dir"]) / "feed_source_config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +241,7 @@ def main():
         if args.type == "hn":
             print(json.dumps(hn_items, indent=2))
 
-    # Write source config for the ranker (prefer_articles etc.)
+    # Write source config for the ranker (prefer_longform etc.)
     write_feed_source_config(cfg, sources)
 
     # Save updated last_crawled timestamps

@@ -88,8 +88,36 @@ def _run(query: str, count: int, timeout: int) -> dict[str, Any]:
         return {"error": str(e), "items": []}
 
 
+_THREAD_PATTERNS = (
+    "🧵",
+    "1/",
+    "1.",
+    "thread:",
+    "a thread",
+    "short thread",
+    "long thread",
+)
+
+
+def _is_thread_start(text: str) -> bool:
+    """Heuristic: return True if this tweet looks like the start of a thread."""
+    lower = text.lower().strip()
+    # Ends with truncation marker — more content in thread
+    if text.rstrip().endswith("…") or text.rstrip().endswith("..."):
+        return True
+    # Starts or ends with common thread signals
+    for pat in _THREAD_PATTERNS:
+        if lower.startswith(pat) or lower.endswith(pat):
+            return True
+    return False
+
+
 def _normalize(raw_items: list[dict], handle: str = "") -> list[dict]:
-    """Convert raw Bird tweet objects to hum feed item format."""
+    """Convert raw Bird tweet objects to hum feed item format.
+
+    Thread-start tweets are flagged with is_thread_start=True and thread_url
+    so the caller (or agent) can fetch the full thread via browser.
+    """
     items = []
     for tweet in raw_items:
         if not isinstance(tweet, dict):
@@ -126,7 +154,8 @@ def _normalize(raw_items: list[dict], handle: str = "") -> list[dict]:
 
         text = str(tweet.get("text") or tweet.get("full_text") or "").strip()
 
-        items.append({
+        is_thread = _is_thread_start(text)
+        item = {
             "source": "x",
             "author": f"@{author_handle}",
             "text": text[:500],
@@ -137,7 +166,11 @@ def _normalize(raw_items: list[dict], handle: str = "") -> list[dict]:
             "replies": _int(tweet.get("replyCount") or tweet.get("reply_count")),
             "views": _int(tweet.get("viewCount") or tweet.get("view_count")),
             "media": [],
-        })
+        }
+        if is_thread:
+            item["is_thread_start"] = True
+            item["thread_url"] = url
+        items.append(item)
     return items
 
 

@@ -42,7 +42,9 @@ All user-owned data lives in `<data_dir>`:
 | `<data_dir>/CHANNELS.md` | Publishing platforms and rules |
 | `<data_dir>/CONTENT.md` | Content pillars with keywords for feed classification |
 | `<data_dir>/ideas/ideas.json` | Brainstormed content ideas and brainstorm config |
-| `<data_dir>/content/` | Generated drafts, images, diagrams, videos |
+| `<data_dir>/content/drafts/` | Unpublished drafts (outline → draft → ready) |
+| `<data_dir>/content/published/` | Drafts moved here after successful publish |
+| `<data_dir>/content/images/` | Generated images, cover art, diagrams |
 | `<data_dir>/content-samples/` | Real posts from the user's social media — primary voice reference |
 | `<data_dir>/knowledge/` | User-curated reference material (articles, notes, research) |
 | `<data_dir>/feed/feeds.json` | Aggregated feed — single source of truth for brainstorming |

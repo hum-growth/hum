@@ -377,27 +377,31 @@ Always show count per status. End with: "Use `/hum create [platform] [post type]
 ## /hum content
 
 **What it does:**
-Lists the current saved draft files and generated assets in `<data_dir>/content/`.
+Lists drafts and assets across the content pipeline.
 
 **Steps:**
-1. Read all files in `<data_dir>/content/`
-2. Show them grouped by channel or asset type when possible
-3. Include draft status metadata if present in the file header
-4. If no drafts exist, say so plainly
+1. Read files in `<data_dir>/content/drafts/` (unPublished drafts)
+2. Read files in `<data_dir>/content/published/` (sent posts)
+3. Read files in `<data_dir>/content/images/` (generated images)
+4. Show them grouped by status and platform
+5. Include draft status metadata if present in the file header
+6. If no drafts exist, say so plainly
 
 **Output format:**
 ```
-🗂 Draft Posts
+🗂 Drafts
 
 LinkedIn
-- LinkedIn - The Finance Team of 2028.md · Draft v1 — 2026-03-24
+- LinkedIn - The Finance Team of 2028.md · outline — 2026-03-24
 
 X
-- X - AI Agents as Headcount.md · Draft v2 — 2026-03-25
+- X - AI Agents as Headcount.md · ready — 2026-03-25
 
-Assets
-- diagram-people.png
-- diagram-tools.png
+✅ Published
+- X - OpEx Structure with AI.md — published 2026-04-07
+
+🖼 Images
+- ai-math-trap-2026-04-08.png
 ```
 
 End with: "Use `/hum publish [draft file]` to publish or `/hum create [platform] [post type] [idea ID]` to draft something new."
@@ -443,7 +447,7 @@ Publishes an approved draft to X or LinkedIn via platform connectors (API-based)
 ### Shared steps
 
 **Steps:**
-1. Read the draft from `<data_dir>/content/`
+1. Read the draft from `<data_dir>/content/drafts/`
 2. Read connector docstrings in `skills/hum/scripts/act/connectors/` for credential shape and connector details
 3. Show the exact final text and ask: "Ready to publish to [platform]?"
 4. Run a preview first:
@@ -484,7 +488,7 @@ Use an image generation API (Gemini or MiniMax) to create a cover image for the 
 
 - **API key:** uses the configured image provider (see `/hum config`)
 - **Prompt:** generate a LinkedIn article cover image for the article title, matching the user's style preferences
-- **Save to:** `<data_dir>/content/LinkedIn Cover - [article title].png`
+- **Save to:** `<data_dir>/content/images/LinkedIn Cover - [article title].png`
 - Show the image to the user and ask for approval before proceeding
 
 #### Step 2 — Draft the intro feed post
@@ -493,7 +497,7 @@ Write a short LinkedIn feed post (100–150 words) to introduce the article:
 - Opens with the article's core tension or hook (not "I wrote an article")
 - 2–3 sentences of substance — what the reader will get
 - Ends with: "Full article 👇" or "Link in comments." (choose based on `CHANNELS.md` rules)
-- Save to: `<data_dir>/content/LinkedIn Post - [article title].md`
+- Save to: `<data_dir>/content/drafts/LinkedIn Post - [article title].md`
 - Show to user for approval before publishing
 
 #### Step 3 — Publish the article (browser)

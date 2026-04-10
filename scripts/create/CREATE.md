@@ -145,10 +145,10 @@ After the outline is approved:
 
 **On approval:**
 - Update the idea status in `ideas.json` -> `drafted`
-- Save draft to `<data_dir>/content/[Platform] [Post Type] - [title].md`
+- Save draft to `<data_dir>/content/drafts/[Platform] [Post Type] - [title].md`
   - Example: `X Tweet - AI Agents as Headcount.md`, `LinkedIn Article - The Finance Team of 2028.md`
-- Save any related generated artifacts in the same `<data_dir>/content/` folder
-  - Examples: diagrams, images, video scripts, thumbnails, or supporting media
+- Save any related generated images to `<data_dir>/content/images/`
+  - Examples: diagrams, thumbnails, cover images, or supporting media
 
 **On publish confirmation** ("publish this" / "post it"):
 - Update idea/topic status -> `published`, add date

@@ -32,10 +32,10 @@ def load_sources(path: Path) -> dict:
         # Handle legacy format
         if "feed_sources" not in data:
             return {"feed_sources": []}
-        # Ensure prefer_articles defaults to False for feed types
+        # Ensure prefer_longform defaults to False for feed types
         for entry in data["feed_sources"]:
             if entry.get("type") in ("x_feed", "linkedin_feed"):
-                entry.setdefault("prefer_articles", False)
+                entry.setdefault("prefer_longform", False)
         return data
     return {"feed_sources": []}
 
@@ -79,10 +79,10 @@ def cmd_list(sources: dict, filter_type: str | None = None):
         for s in items:
             crawled = f" [crawled: {s['last_crawled']}]" if s.get("last_crawled") else " [never crawled]"
             if st == "x_feed":
-                pa = " [prefer_articles]" if s.get("prefer_articles") else ""
+                pa = " [prefer_longform]" if s.get("prefer_longform") else ""
                 print(f"  {s.get('description', 'X home feed')}{pa}{crawled}")
             elif st == "linkedin_feed":
-                pa = " [prefer_articles]" if s.get("prefer_articles") else ""
+                pa = " [prefer_longform]" if s.get("prefer_longform") else ""
                 print(f"  {s.get('description', 'LinkedIn home feed')}{pa}{crawled}")
             elif st == "x_profile":
                 cat = f" [{s['category']}]" if s.get("category") else ""

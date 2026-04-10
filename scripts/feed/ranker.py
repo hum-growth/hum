@@ -36,13 +36,13 @@ def extract_keywords(text: str) -> list[str]:
             cleaned.append(w)
     return list(set(cleaned))
 
-def _prefer_articles_for_post(post: dict, feed_config: dict) -> bool:
-    """Return True if prefer_articles is enabled for this post's source."""
+def _prefer_longform_for_post(post: dict, feed_config: dict) -> bool:
+    """Return True if prefer_longform is enabled for this post's source."""
     source = post.get("source", "")
     if source == "x":
-        return feed_config.get("x_feed", {}).get("prefer_articles", False)
+        return feed_config.get("x_feed", {}).get("prefer_longform", False)
     if source in ("linkedin", "linkedin_feed"):
-        return feed_config.get("linkedin_feed", {}).get("prefer_articles", False)
+        return feed_config.get("linkedin_feed", {}).get("prefer_longform", False)
     return False
 
 
@@ -73,7 +73,7 @@ def score_post(post: dict, prefs: dict, feed_config: dict | None = None) -> floa
     score = base * author_w * topic_w * kw_w
 
     # Article/thread preference: boost long-form, penalise short tweets
-    if feed_config and _prefer_articles_for_post(post, feed_config):
+    if feed_config and _prefer_longform_for_post(post, feed_config):
         article_multiplier = 1.0
         text_len = len(text)
 
