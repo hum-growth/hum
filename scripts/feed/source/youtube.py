@@ -200,6 +200,8 @@ def build_feed_items(creators: List[Dict[str, str]], days: int, max_videos: int)
         body_text = summary if summary else title
         topics = classify(f"{title}\n{transcript[:800]}")
 
+        highlights = youtube_yt.extract_transcript_highlights(transcript, title)
+
         feed_items.append({
             "source": "youtube",
             "author": item.get("channel_name") or item.get("creator_name") or "",
@@ -207,6 +209,7 @@ def build_feed_items(creators: List[Dict[str, str]], days: int, max_videos: int)
             "title": title,
             "text": body_text,
             "summary": summary,
+            "highlights": highlights,
             "url": item.get("url", ""),
             "topics": topics,
             "published": item.get("date", ""),

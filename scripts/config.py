@@ -157,6 +157,37 @@ def load_topics(data_dir: Path | None = None) -> dict[str, list[str]]:
     return topics
 
 
+def load_x_credentials() -> dict[str, str | None]:
+    """Load X/Twitter session credentials for Bird-based scraping.
+
+    Priority order:
+      1. HUM_X_AUTH_TOKEN / HUM_X_CT0 env vars
+      2. ~/.hum/credentials/x.json → "auth_token" / "ct0"
+      3. AUTH_TOKEN / CT0 env vars (shared with last30days)
+
+    Returns dict with keys: auth_token, ct0 (either may be None).
+    """
+    auth_token = os.environ.get("HUM_X_AUTH_TOKEN")
+    ct0 = os.environ.get("HUM_X_CT0")
+
+    if not (auth_token and ct0):
+        creds_file = Path.home() / ".hum" / "credentials" / "x.json"
+        if creds_file.exists():
+            try:
+                with open(creds_file) as f:
+                    data = json.load(f)
+                auth_token = auth_token or data.get("auth_token")
+                ct0 = ct0 or data.get("ct0")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    if not (auth_token and ct0):
+        auth_token = auth_token or os.environ.get("AUTH_TOKEN")
+        ct0 = ct0 or os.environ.get("CT0")
+
+    return {"auth_token": auth_token, "ct0": ct0}
+
+
 if __name__ == "__main__":
     cfg = load_config()
     for k, v in cfg.items():

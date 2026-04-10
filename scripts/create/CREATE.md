@@ -17,6 +17,7 @@ Drafts content for a specific platform and post type using the user's voice and 
 |-----------|--------|
 | `Tweet` | Single tweet, under 280 chars, hook-driven. Optional media (image/video). |
 | `Thread` | Multiple numbered tweets, each under 280 chars. Hook in tweet 1. Media can attach to any tweet. |
+| `Article` | Long-form post, up to 25,000 chars. Premium subscribers only. Rich text formatting (H2 section headers, bold, italic, lists). Cover image required. Draft in full prose with 3-6 H2 sections. Each section is a natural reading chunk. Open with a strong hook paragraph, close with a reflection or question. Write a 1-2 sentence intro post to accompany the article. |
 
 **LinkedIn:**
 | Post Type | Format |
@@ -81,41 +82,45 @@ Discard generic filler. Only keep findings that are specific enough to cite in a
 
 ## Step 3 — Propose Outline
 
-Present the research findings, a recommended writing style, and a structured outline for the user's approval. Do NOT write prose yet.
+Present the research findings, a recommended writing style, and a structured outline for the user's approval. **Do NOT write prose yet.**
 
 Select the best style from STYLES.md using the Style Selection Guide. Consider the content goal, platform, and post type. Styles can be blended (e.g. "Technical Storyteller + Contrarian Debater").
 
-```
-📋 Outline — [Topic Title]
+The outline **must** include:
 
-**Platform:** [X / LinkedIn]
-**Post Type:** [Tweet / Thread / Post / Article]
-**Style:** [Style name] — [1-line reason this style fits]
-**Hook type:** [Which hook strategy from the style — e.g. "The Reframe"]
+### Style Selection (required)
+- **Style:** [Name from STYLES.md, e.g. "Technical Storyteller"]
+- **Why this style:** [1-line explanation of why this style fits the content goal and audience]
+- **Hook type:** [Which hook strategy from the style, e.g. "The Reframe"]
 
-## Research Summary
+### Research Summary (required)
 - [Key finding 1 — stat or fact with source]
 - [Key finding 2 — named example or quote]
 - [Key finding 3 — contrarian view or caveat]
 - [Key finding 4 — timeliness signal]
 
-## Proposed Outline
+### Proposed Outline (required)
+```
+**Platform:** [X / LinkedIn]
+**Post Type:** [Tweet / Thread / Post / Article]
+**Style:** [Style name] — [1-line reason this style fits]
+**Hook type:** [Which hook strategy from the style]
 
 **Hook:** [Opening line or tension — what stops the scroll]
 **Angle:** [The specific POV or contrarian take — why YOUR post is different]
 
-**Structure:**
-1. [Section/beat 1 — what it covers, which finding supports it]
-2. [Section/beat 2 — ...]
-3. [Section/beat 3 — ...]
-4. [Close — the reflection, question, or CTA]
+**Tweet 1:** [Hook — what stops the scroll]
+**Tweet 2:** [Build — deepen or pivot from hook]
+**Tweet 3:** [Evidence or tension — the data or reframe]
+**Tweet 4:** [Payoff — what it means in practice]
+**Tweet 5:** [Close — reflection or question]
 
 **Named concept (if any):** [Optional framework or label that makes the idea sticky]
-**Supporting evidence to use:** [Which of the research findings make the cut]
-**What we're NOT covering:** [Angles deliberately excluded, and why]
+**Supporting evidence:** [Which research findings make the cut]
+**Excluded:** [Angles deliberately left out and why]
 ```
 
-Ask: "Does this outline work? Want to change the style, angle, hook, or structure?"
+**Ask:** "Does this outline work? Want to change the style, angle, hook, or structure?"
 
 **Only proceed to Step 4 after the user approves or adjusts the outline.**
 

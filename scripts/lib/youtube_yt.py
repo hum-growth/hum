@@ -16,6 +16,54 @@ from typing import Dict, List, Optional
 TRANSCRIPT_MAX_WORDS = 500
 
 
+def extract_transcript_highlights(transcript: str, topic: str, limit: int = 5) -> list[str]:
+    """Extract quotable highlights from a YouTube transcript.
+
+    Filters filler sentences (subscribe, welcome back, etc.), scores by
+    specificity (numbers, proper nouns, topic relevance), and returns the
+    top highlights. Ported from last30days-official.
+    """
+    if not transcript:
+        return []
+
+    sentences = re.split(r'(?<=[.!?])\s+', transcript)
+
+    # For punctuation-free auto-captions, chunk into ~20-word segments
+    if len(sentences) <= 1 and len(transcript.split()) > 50:
+        words = transcript.split()
+        sentences = [' '.join(words[i:i+20]) for i in range(0, len(words), 20)]
+
+    filler = [
+        r"^(hey |hi |what's up|welcome back|in today's video|don't forget to)",
+        r"(subscribe|like and comment|hit the bell|check out the link|down below)",
+        r"^(so |and |but |okay |alright |um |uh )",
+        r"(thanks for watching|see you (next|in the)|bye)",
+    ]
+    topic_words = [w.lower() for w in topic.lower().split() if len(w) > 2]
+
+    candidates = []
+    for sent in sentences:
+        sent = sent.strip()
+        words = sent.split()
+        if len(words) < 8 or len(words) > 50:
+            continue
+        if any(re.search(p, sent, re.IGNORECASE) for p in filler):
+            continue
+        score = 0
+        if re.search(r'\d', sent):
+            score += 2
+        if re.search(r'[A-Z][a-z]+', sent):
+            score += 1
+        if '?' in sent:
+            score += 1
+        if any(w in sent.lower() for w in topic_words):
+            score += 2
+        candidates.append((score, sent))
+
+    candidates.sort(key=lambda x: -x[0])
+    return [sent for _, sent in candidates[:limit]]
+
+
 def _log(msg: str):
     sys.stderr.write(f"[YouTube] {msg}\n")
     sys.stderr.flush()

@@ -29,7 +29,11 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.sources import load_sources, save_sources, get_by_type, update_last_crawled
-from feed.source.x import home_feed_instructions, profile_instructions as x_profile_instructions
+from feed.source.x import (
+    home_feed_instructions,
+    profile_instructions as x_profile_instructions,
+    fetch_profile_via_bird,
+)
 from feed.source.linkedin import home_feed_instructions as linkedin_home_feed_instructions, profile_instructions as linkedin_profile_instructions
 from feed.source.hn import fetch_hn
 
@@ -41,35 +45,84 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def write_feed_source_config(cfg: dict, sources: dict) -> None:
+    """Write feed_source_config.json with per-source settings (e.g. prefer_articles) for the ranker."""
+    config = {}
+    for source_type in ("x_feed", "linkedin_feed"):
+        entries = get_by_type(sources, source_type)
+        if entries:
+            entry = entries[0]
+            config[source_type] = {
+                "prefer_articles": entry.get("prefer_articles", False)
+            }
+    config_path = Path(cfg["feed_dir"]) / "feed_source_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
 def refresh_x_feed(scrolls: int = 5, output: str | None = None) -> dict:
     """Emit browser automation instructions for X home feed."""
     return home_feed_instructions(scrolls, output)
 
 
 def refresh_x_profiles(sources: dict, output_dir: Path | None = None) -> list[dict]:
-    """Emit browser automation instructions for all configured X profiles (incremental).
+    """Crawl all configured X profiles, incrementally.
 
-    Returns a list of instruction dicts, one per profile.
+    Uses Bird (direct API via AUTH_TOKEN/CT0) when credentials are available,
+    writing items directly into feeds.json. Falls back to browser automation
+    instructions when credentials are absent.
+
+    Returns a list of browser instruction dicts for profiles that needed the
+    browser fallback (empty list when Bird handled everything).
     """
     profiles = get_by_type(sources, "x_profile")
     if not profiles:
         print("  No X profile sources configured.")
         return []
 
-    results = []
+    browser_instructions = []
+    feeds_path = Path(_CFG["feeds_file"])
+
     for p in profiles:
         handle = p.get("handle", "")
         if not handle:
             continue
         since = p.get("last_crawled")
+        since_note = f" (since {since})" if since else " (first crawl)"
+
+        # Try Bird first (direct API, no browser needed)
+        items = fetch_profile_via_bird(handle, since=since)
+        if items is not None:
+            print(f"  Bird: fetched {len(items)} tweets from @{handle}{since_note}")
+            _merge_into_feeds(feeds_path, items)
+            update_last_crawled(sources, "x_profile", handle, _now_iso())
+            continue
+
+        # Fallback: emit browser automation instructions
         out = str((output_dir or _CFG["feed_raw"]) / f"x_{handle}.json")
         instr = x_profile_instructions(handle, out, since=since)
-        results.append(instr)
-        since_note = f" (since {since})" if since else " (first crawl)"
-        print(f"  Prepared instructions for: @{handle}{since_note}")
+        browser_instructions.append(instr)
+        print(f"  Browser: prepared instructions for @{handle}{since_note}")
         update_last_crawled(sources, "x_profile", handle, _now_iso())
 
-    return results
+    return browser_instructions
+
+
+def _merge_into_feeds(feeds_path: Path, new_items: list[dict]) -> None:
+    """Merge new feed items into feeds.json, deduplicating by URL."""
+    existing: list[dict] = []
+    if feeds_path.exists():
+        try:
+            existing = json.loads(feeds_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    existing_urls = {p.get("url") for p in existing if p.get("url")}
+    added = [item for item in new_items if item.get("url") not in existing_urls]
+    merged = existing + added
+
+    feeds_path.parent.mkdir(parents=True, exist_ok=True)
+    feeds_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
 
 def refresh_linkedin_feed(scrolls: int = 5, output: str | None = None) -> dict:
@@ -188,6 +241,9 @@ def main():
         if args.type == "hn":
             print(json.dumps(hn_items, indent=2))
 
+    # Write source config for the ranker (prefer_articles etc.)
+    write_feed_source_config(cfg, sources)
+
     # Save updated last_crawled timestamps
     save_sources(sources_file, sources)
 
@@ -196,7 +252,7 @@ def main():
     if "x_feed" in results:
         browser_types.append("X feed")
     if "x_profile" in results and results["x_profile"]:
-        browser_types.append(f"{len(results['x_profile'])} X profile(s)")
+        browser_types.append(f"{len(results['x_profile'])} X profile(s) (browser fallback)")
     if "linkedin_feed" in results:
         browser_types.append("LinkedIn feed")
     if "linkedin_profile" in results and results["linkedin_profile"]:

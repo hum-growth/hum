@@ -2,8 +2,13 @@
 """
 x.py — X/Twitter feed source: scrape home feed, threads, and tweets with media.
 
-This module outputs structured JSON instructions for browser automation.
-The actual scraping is performed by the agent using the browser tool.
+Profile scraping has two modes:
+  - Bird (direct): uses AUTH_TOKEN + CT0 session credentials to call X's
+    GraphQL API via the vendored bird-search.mjs. Returns feed items directly.
+  - Browser (fallback): returns structured JSON instructions for the browser
+    automation agent when credentials are not available.
+
+Home feed and thread/tweet scraping always use browser instructions.
 
 Usage:
     python3 -m feed.source.x home [--scrolls N] [--output PATH]
@@ -19,9 +24,44 @@ from pathlib import Path
 _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from config import load_config, load_topics
+from config import load_config, load_topics, load_x_credentials
+from lib import bird_x as _bird
 
 _CFG = load_config()
+
+# ── Bird credential bootstrap ──────────────────────────────────────────────
+
+def _init_bird() -> None:
+    """Inject X credentials into the Bird client (once per process)."""
+    if not hasattr(_init_bird, "_done"):
+        creds = load_x_credentials()
+        _bird.set_credentials(creds.get("auth_token"), creds.get("ct0"))
+        _init_bird._done = True
+
+
+# ── Profile scraping via Bird ──────────────────────────────────────────────
+
+def fetch_profile_via_bird(
+    handle: str,
+    since: str | None = None,
+    count: int = 20,
+) -> list[dict] | None:
+    """Fetch recent posts from an X profile directly using Bird (no browser needed).
+
+    Returns a list of hum feed items if Bird credentials are available and the
+    fetch succeeds, or None if Bird is not available (caller should fall back to
+    browser instructions).
+
+    Args:
+        handle: X handle (without @)
+        since: ISO 8601 timestamp — only return tweets posted after this date
+        count: Max number of tweets to fetch
+    """
+    _init_bird()
+    if not _bird.is_available():
+        return None
+    return _bird.fetch_profile(handle, since=since, count=count)
+
 
 # ── Topic classification ───────────────────────────────────────────────────
 
