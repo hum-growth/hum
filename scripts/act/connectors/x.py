@@ -273,15 +273,11 @@ def get_stats(
 ) -> dict[str, Any]:
     """Get engagement stats for an X account or post.
 
-    Tries X API first; falls back to browser-based extraction when no credentials.
-    Since browser access requires the agent's session, this returns a marker
-    telling the caller to invoke browser commands in the main session.
+    X API v2 stats (public_metrics, impression_count) require Pro tier ($5k/mo).
+    Always falls back to browser-based scraping via the agent's browser session.
     """
-    if _api_available(account):
-        raise NotImplementedError("X API does not support stats retrieval yet")
-
     creds = load_credentials(account)
-    username = creds.get("username", account)
+    username = creds.get("username", account) if creds else account
     return {
         "needs_browser": True,
         "platform": "x",

@@ -309,21 +309,31 @@ Analyzes the feed and researches current platform algorithms to improve content 
 **Steps:**
 1. Read `<data_dir>/VOICE.md`, `<data_dir>/AUDIENCE.md`, `<data_dir>/CHANNELS.md`, and `<data_dir>/CONTENT.md`
 2. Read `feed/feeds.json` — analyze what topics are trending, which posts got high engagement, what formats are performing
-3. Research platform algorithms with web search:
+3. Scrape your own post performance via browser:
+
+   Run:
+   ```bash
+   python3 -m act.analyze --platform all --account <account>
+   ```
+   This returns browser instructions — follow them to scrape your X and LinkedIn profiles.
+
+   From the scraped data, identify:
+   - Top 3 posts by engagement (likes + replies + reposts) on each platform
+   - Patterns: which formats (tweet, thread, LinkedIn post), hooks, or topics performed best
+   - Any clear underperformers
+   - If no posts are found or data is thin, note it clearly — do not fabricate
+
+4. Research platform algorithms with web search:
    - For each channel in `CHANNELS.md`, search for current algorithm priorities, favored formats, and distribution patterns
    - e.g. `"LinkedIn algorithm 2026" what content gets reach`, `"X Twitter algorithm" post format engagement 2026`
    - Focus on actionable signals: post length, format, timing, media usage, engagement patterns
-4. Review recent channel performance:
-   - Use any real performance data available (analytics, post metrics)
-   - Look for patterns by platform, format, hook type, topic, and media usage
-   - If performance data is limited, say so clearly and avoid fake precision
 5. Update context files in `<data_dir>`:
    - Update `VOICE.md` if tone/style adjustments are supported by evidence
    - Update `CHANNELS.md` with new platform-specific tactics or format guidance
    - Update `CONTENT.md` if certain pillars are trending or underperforming
    - Only make changes backed by evidence — do not speculate
 6. Present a concise summary:
-   - What's trending in the feed
+   - Your top-performing posts and what they have in common
    - What the algorithms are currently favoring
    - What changes were made to context files
    - What to test next week
@@ -548,23 +558,53 @@ Default: `all` (both platforms). Specify `x` or `linkedin` to scope.
 
 ### Part 2 — Suggest outbound replies (engagement plays)
 
-1. Open the relevant X account home feed for this user
-2. Scroll through the feed — look for posts from relevant accounts in the user's niche
-3. Pick 3–5 posts where a smart, insightful reply from the user's account would add value
-4. Draft a reply for each — 1–2 sentences, adds a specific insight or contrarian take, NOT generic
-5. Present as:
+**Goal:** Reply to recent posts from niche accounts in a way that feels authentic, adds real value, and builds visibility in the right circles.
+
+**Step 1 — Identify target accounts**
+
+Pull target accounts from two sources:
+1. `<data_dir>/feed/sources.json` — entries with `type: x_profile` or `type: linkedin_profile`
+2. `<data_dir>/knowledge/index.md` — the "Influencers & Thought Leaders" tables (Name + Platform columns)
+
+Combine into a single candidate list. Prioritise accounts that appear in both sources — these are most relevant to the user's niche.
+
+**Step 2 — Find recent posts worth replying to**
+
+For each candidate account (work through 8–12 to find 3–5 good matches):
+1. Navigate to their profile in the browser
+2. Find their most recent post from the **last 48 hours** — skip if nothing recent
+3. Read the full post text carefully
+
+A post is worth replying to if it:
+- Makes a specific claim, shares data, or argues a position
+- Is in the user's niche (check against `<data_dir>/CONTENT.md` content pillars)
+- Has some engagement already — signals the conversation is active
+- Is not a repost or share of someone else's content
+
+**Step 3 — Draft replies**
+
+Before drafting, read `<data_dir>/VOICE.md` for tone and style.
+
+For each selected post, draft a reply that:
+- **Anchors to something specific** in the post — a stat, a claim, a specific phrase. Never summarise generically.
+- **Does one of:** adds a related data point, offers a contrarian take with a concrete reason, or extends the argument with a specific example
+- **Feels like a person wrote it** — no filler openers ("Great point!", "Love this", "So true", "This is spot on"). Start with the substance.
+- **Is concise** — 1–2 sentences for X (under 280 chars), 2–3 sentences for LinkedIn
+- **Matches the user's voice** per VOICE.md — calm, direct, grounded in specifics
+
+**Step 4 — Present for approval**
 
 ```
-💬 Engagement Plays — suggested replies to other accounts
+💬 Engagement Plays — suggested replies
 
-1. @[account] — "[their post summary]"
-   → Suggested reply: [draft]
+1. @[account] on [platform] — "[exact quote or key claim from their post]"
+   → [drafted reply]
 
-2. @[account] — "[their post summary]"
-   → Suggested reply: [draft]
+2. @[account] on [platform] — "[exact quote or key claim from their post]"
+   → [drafted reply]
 ```
 
-6. Ask: "Which should I post?"
+Ask: "Which should I post? Any edits?"
 
 ---
 
