@@ -63,6 +63,32 @@ def fetch_profile_via_bird(
     return _bird.fetch_profile(handle, since=since, count=count)
 
 
+def fetch_home_feed_via_bird(
+    since: str | None = None,
+    count: int = 40,
+) -> list[dict] | None:
+    """Fetch X home feed directly via Bird (filter:follows). No browser needed.
+
+    Returns feed items with topic classification applied, or None if Bird
+    credentials are not configured.
+
+    Args:
+        since: ISO 8601 timestamp — only return tweets posted after this date
+        count: Max number of tweets to fetch
+    """
+    _init_bird()
+    if not _bird.is_available():
+        return None
+
+    items = _bird.fetch_home_feed(since=since, count=count)
+    # Classify each item by topic so the ranker/digest see the same shape
+    # that HN items carry. The home feed is the broadest intake — topic
+    # tagging matters most here.
+    for item in items:
+        item["topics"] = classify(item.get("text", ""))
+    return items
+
+
 # ── Topic classification ───────────────────────────────────────────────────
 
 

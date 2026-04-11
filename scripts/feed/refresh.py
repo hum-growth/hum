@@ -3,19 +3,19 @@
 refresh.py — Crawl feed sources and aggregate results.
 
 Orchestrates crawling across source types:
-  - x_feed: emits browser automation instructions for X home feed
-  - x_profile: emits browser automation instructions for individual X profiles (incremental)
-  - linkedin_feed: emits browser automation instructions for LinkedIn home feed
-  - linkedin_profile: emits browser automation instructions for LinkedIn profiles (incremental)
-  - hn: fetches Hacker News stories via Algolia API
+  - x_feed: fetches X home feed via Bird (filter:follows). Direct API, no browser.
+  - x_profile: fetches individual X profiles via Bird (from:handle). Direct API.
+  - hn: fetches Hacker News stories via Algolia API.
 
-Respects last_crawled per source for incremental updates (x_profile, linkedin_profile).
+All sources run as direct API/subprocess calls within one Python process.
+No browser automation, no agent-in-the-loop steps.
+
+Respects last_crawled per source for incremental updates.
 
 Usage:
-    python3 refresh.py [--type x_feed|x_profile|linkedin_feed|linkedin_profile|hn|all]
-    python3 refresh.py --type x_feed --scrolls 5
+    python3 refresh.py [--type x_feed|x_profile|hn|all]
+    python3 refresh.py --type x_feed
     python3 refresh.py --type x_profile
-    python3 refresh.py --type linkedin_profile
     python3 refresh.py --type hn
 """
 import argparse
@@ -30,11 +30,10 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 from config import load_config
 from feed.sources import load_sources, save_sources, get_by_type, update_last_crawled
 from feed.source.x import (
-    home_feed_instructions,
     profile_instructions as x_profile_instructions,
     fetch_profile_via_bird,
+    fetch_home_feed_via_bird,
 )
-from feed.source.linkedin import home_feed_instructions as linkedin_home_feed_instructions, profile_instructions as linkedin_profile_instructions
 from feed.source.hn import fetch_hn
 
 _CFG = load_config()
@@ -48,7 +47,7 @@ def _now_iso() -> str:
 def write_feed_source_config(cfg: dict, sources: dict) -> None:
     """Write feed_source_config.json with per-source settings (e.g. prefer_longform) for the ranker."""
     config = {}
-    for source_type in ("x_feed", "linkedin_feed"):
+    for source_type in ("x_feed",):
         entries = get_by_type(sources, source_type)
         if entries:
             entry = entries[0]
@@ -60,9 +59,46 @@ def write_feed_source_config(cfg: dict, sources: dict) -> None:
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
-def refresh_x_feed(scrolls: int = 5, output: str | None = None) -> dict:
-    """Emit browser automation instructions for X home feed."""
-    return home_feed_instructions(scrolls, output)
+def _merge_into_feeds(feeds_path: Path, new_items: list[dict]) -> None:
+    """Merge new feed items into feeds.json, deduplicating by URL."""
+    existing: list[dict] = []
+    if feeds_path.exists():
+        try:
+            existing = json.loads(feeds_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    existing_urls = {p.get("url") for p in existing if p.get("url")}
+    added = [item for item in new_items if item.get("url") not in existing_urls]
+    merged = existing + added
+
+    feeds_path.parent.mkdir(parents=True, exist_ok=True)
+    feeds_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+
+
+def refresh_x_feed(count: int = 40) -> list[dict]:
+    """Fetch X home feed via Bird (filter:follows) and merge into feeds.json.
+
+    Uses the single 'x_feed' entry in sources.json (if present) for incremental
+    last_crawled tracking. Returns the list of fetched items for reporting.
+    """
+    feeds_path = Path(_CFG["feeds_file"])
+    sources_file = _CFG["sources_file"]
+    sources = load_sources(sources_file)
+    feed_entries = get_by_type(sources, "x_feed")
+    since = feed_entries[0].get("last_crawled") if feed_entries else None
+    since_note = f" (since {since})" if since else " (first crawl)"
+
+    items = fetch_home_feed_via_bird(since=since, count=count)
+    if items is None:
+        print(f"  Bird credentials not configured — skipping x_feed{since_note}")
+        return []
+
+    print(f"  Bird: fetched {len(items)} tweets from home feed{since_note}")
+    _merge_into_feeds(feeds_path, items)
+    update_last_crawled(sources, "x_feed", "", _now_iso())
+    save_sources(sources_file, sources)
+    return items
 
 
 def refresh_x_profiles(sources: dict, output_dir: Path | None = None) -> list[dict]:
@@ -108,55 +144,6 @@ def refresh_x_profiles(sources: dict, output_dir: Path | None = None) -> list[di
     return browser_instructions
 
 
-def _merge_into_feeds(feeds_path: Path, new_items: list[dict]) -> None:
-    """Merge new feed items into feeds.json, deduplicating by URL."""
-    existing: list[dict] = []
-    if feeds_path.exists():
-        try:
-            existing = json.loads(feeds_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            existing = []
-
-    existing_urls = {p.get("url") for p in existing if p.get("url")}
-    added = [item for item in new_items if item.get("url") not in existing_urls]
-    merged = existing + added
-
-    feeds_path.parent.mkdir(parents=True, exist_ok=True)
-    feeds_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-
-
-def refresh_linkedin_feed(scrolls: int = 5, output: str | None = None) -> dict:
-    """Emit browser automation instructions for LinkedIn home feed."""
-    return linkedin_home_feed_instructions(scrolls, output)
-
-
-def refresh_linkedin_profiles(sources: dict, output_dir: Path | None = None) -> list[dict]:
-    """Emit browser automation instructions for all configured LinkedIn profiles (incremental).
-
-    Returns a list of instruction dicts, one per profile.
-    """
-    profiles = get_by_type(sources, "linkedin_profile")
-    if not profiles:
-        print("  No LinkedIn profile sources configured.")
-        return []
-
-    results = []
-    for p in profiles:
-        url = p.get("url", "")
-        name = p.get("name", url)
-        if not url:
-            continue
-        since = p.get("last_crawled")
-        out = str((output_dir or _CFG["feed_raw"]) / f"linkedin_{url.split('/in/')[-1].rstrip('/')}.json")
-        instr = linkedin_profile_instructions(url, out, since=since)
-        results.append(instr)
-        since_note = f" (since {since})" if since else " (first crawl)"
-        print(f"  Prepared instructions for: {name} ({url}){since_note}")
-        update_last_crawled(sources, "linkedin_profile", url, _now_iso())
-
-    return results
-
-
 def refresh_hn(
     output_path: Path,
     story_type: str = "both",
@@ -186,12 +173,11 @@ def main():
     parser = argparse.ArgumentParser(description="Refresh feed sources")
     parser.add_argument(
         "--type",
-        choices=["x_feed", "x_profile", "linkedin_feed", "linkedin_profile", "hn", "all"],
+        choices=["x_feed", "x_profile", "hn", "all"],
         default="all",
         help="Source type to crawl (default: all)",
     )
-    parser.add_argument("--scrolls", type=int, default=5, help="Browser scrolls for x_feed and linkedin_feed")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON path")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON path (HN merges into this file)")
 
     args = parser.parse_args()
 
@@ -202,37 +188,21 @@ def main():
 
     results = {}
 
-    # x_feed — browser automation for X home feed
+    # x_feed — Bird filter:follows, direct fetch + merge
     if args.type in ("x_feed", "all"):
-        instructions = refresh_x_feed(args.scrolls, args.output)
-        results["x_feed"] = instructions
-        update_last_crawled(sources, "x_feed", "", _now_iso())
+        items = refresh_x_feed()
+        results["x_feed"] = items
         if args.type == "x_feed":
-            print(json.dumps(instructions, indent=2))
+            print(f"[refresh] x_feed: {len(items)} tweets merged", file=sys.stderr)
 
-    # x_profile — browser automation per configured X profile (incremental)
+    # x_profile — Bird per handle, direct fetch + merge (browser fallback if no creds)
     if args.type in ("x_profile", "all"):
         instructions = refresh_x_profiles(sources, raw_dir)
         results["x_profile"] = instructions
         if args.type == "x_profile":
             print(json.dumps(instructions, indent=2, default=str))
 
-    # linkedin_feed — browser automation for LinkedIn home feed
-    if args.type in ("linkedin_feed", "all"):
-        instructions = refresh_linkedin_feed(args.scrolls, args.output)
-        results["linkedin_feed"] = instructions
-        update_last_crawled(sources, "linkedin_feed", "", _now_iso())
-        if args.type == "linkedin_feed":
-            print(json.dumps(instructions, indent=2))
-
-    # linkedin_profile — browser automation per configured LinkedIn profile (incremental)
-    if args.type in ("linkedin_profile", "all"):
-        instructions = refresh_linkedin_profiles(sources, raw_dir)
-        results["linkedin_profile"] = instructions
-        if args.type == "linkedin_profile":
-            print(json.dumps(instructions, indent=2, default=str))
-
-    # hn — fetch Hacker News stories via Algolia API and merge into feeds.json
+    # hn — Algolia API, direct fetch + merge
     if args.type in ("hn", "all"):
         feeds_path = Path(args.output)
         hn_items = refresh_hn(feeds_path)
@@ -248,17 +218,13 @@ def main():
     save_sources(sources_file, sources)
 
     print(f"\nRefresh complete.")
-    browser_types = []
-    if "x_feed" in results:
-        browser_types.append("X feed")
+    fetched = []
+    if "x_feed" in results and results["x_feed"]:
+        fetched.append(f"{len(results['x_feed'])} X home feed tweets")
     if "x_profile" in results and results["x_profile"]:
-        browser_types.append(f"{len(results['x_profile'])} X profile(s) (browser fallback)")
-    if "linkedin_feed" in results:
-        browser_types.append("LinkedIn feed")
-    if "linkedin_profile" in results and results["linkedin_profile"]:
-        browser_types.append(f"{len(results['linkedin_profile'])} LinkedIn profile(s)")
-    if browser_types:
-        print(f"Browser instructions emitted for: {', '.join(browser_types)} — execute via browser tool.")
+        fetched.append(f"{len(results['x_profile'])} X profile(s) (browser fallback — no Bird creds)")
+    if fetched:
+        print(f"Fetched: {', '.join(fetched)}.")
     if "hn" in results:
         print(f"HN: {len(results['hn'])} stories merged into {args.output}.")
 

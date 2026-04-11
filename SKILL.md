@@ -4,7 +4,7 @@ description: Your AI content writer for X and LinkedIn. Hum handles the full con
 ---
 
 1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md) and folders
-3. **Refresh feed** — `/hum refresh-feed` crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC; ranks items; sends a digest to Telegram; saves aggregated data to `feeds.json`
+3. **Refresh feed** — `/hum refresh-feed` fetches your X home feed (via Bird `filter:follows`), configured X profiles, Hacker News, and YouTube — all via direct APIs with no browser automation. Ranks items, sends a digest to Telegram, saves aggregated data to `feeds.json`
 4. **Manage sources** — `/hum sources` adds, removes, and lists feed sources
 5. **Brainstorm** — `/hum brainstorm` researches each content pillar across YouTube, X, Reddit, Hacker News, Polymarket, and web, then saves ideas to `ideas.json`
 6. **Learn** — `/hum learn` analyzes feed trends and platform algorithms, updates context files

@@ -208,3 +208,31 @@ def fetch_profile(handle: str, since: str | None = None, count: int = 20, timeou
 
     raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
     return _normalize(raw if isinstance(raw, list) else [], handle=handle)
+
+
+def fetch_home_feed(since: str | None = None, count: int = 40, timeout: int = 45) -> list[dict]:
+    """Fetch tweets from followed accounts via Bird (X search with filter:follows).
+
+    Uses the X search operator 'filter:follows' to restrict results to accounts
+    the authenticated session follows — effectively the home timeline without
+    any browser automation.
+
+    Args:
+        since: ISO 8601 date string (YYYY-MM-DD) — only fetch tweets after this date
+        count: Max number of tweets to fetch (default 40, ~5 scrolls worth)
+        timeout: Seconds before giving up
+
+    Returns:
+        List of normalized hum feed items, or empty list on failure/no credentials.
+    """
+    query = "filter:follows"
+    if since:
+        query += f" since:{since[:10]}"
+
+    response = _run(query, count, timeout)
+
+    if response.get("error"):
+        return []
+
+    raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
+    return _normalize(raw if isinstance(raw, list) else [], handle="")

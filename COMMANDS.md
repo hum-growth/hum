@@ -43,25 +43,30 @@ Use `/opt/homebrew/bin/python3` for all script calls.
 ## /hum refresh-feed
 
 **What it does:**
-Crawls X/Twitter, YouTube, Hacker News, Product Hunt, and YC — ranks items, sends a formatted digest via Telegram, and saves aggregated data to `<data_dir>/feed/feeds.json`.
+Fetches X home feed, X profiles, Hacker News, and YouTube via direct APIs — ranks items, sends a formatted digest via Telegram, and saves aggregated data to `<data_dir>/feed/feeds.json`. No browser automation.
 
 **This command is also triggered automatically by the "Morning Digest" cron job at 6:00am SGT daily.**
 
 **Scrape sources:** See `<data_dir>/feed/sources.json` for all feed sources. Manage with `/hum sources`.
 
-### Step 1 — Scrape X/Twitter feed
+### Step 1 — Fetch X feed and profiles (direct via Bird)
 
-Use browser tool to scroll Twitter home feed. Must be logged in on the browser profile.
+Runs the full refresh pipeline in a single command:
 
-```
-browser(action="navigate", url="https://x.com/home")
-# Scroll 5–6 times with 2s pause each to load ~40–60 posts
-# For each visible tweet: extract author handle, full text, likes, tweet URL
+```bash
+python3 skills/hum/scripts/feed/refresh.py --type all
 ```
 
-Run `scripts/feed/refresh.py` to see topic keyword lists. Save extracted posts as `<data_dir>/feed/feeds.json`:
+This fetches:
+- **X home feed**: via Bird `filter:follows since:<last_crawled>` — returns tweets from accounts you follow without any browser.
+- **X profiles**: per-handle `from:<handle> since:<last_crawled>` via Bird.
+- **Hacker News**: via Algolia public API (merged into `feeds.json`).
+
+Requires `AUTH_TOKEN` and `CT0` session cookies in `~/.hum/credentials/x.json` (or the `HUM_X_AUTH_TOKEN` / `HUM_X_CT0` env vars). Extract them once from your browser devtools on x.com. If credentials are missing, the X fetch is skipped with a log message and the rest of the pipeline still runs.
+
+All items are merged into `feeds.json` with `source: "x" | "hn"`, `topics: [...]`, and engagement counts:
 ```json
-[{"author": "@handle", "text": "...", "likes": 123, "url": "https://x.com/...", "topics": ["AI"]}]
+[{"source": "x", "author": "@handle", "text": "...", "likes": 123, "url": "https://x.com/...", "topics": ["AI"]}]
 ```
 
 ### Step 2 — Pull YouTube creator updates
@@ -567,7 +572,7 @@ Default: `all` (both platforms). Specify `x` or `linkedin` to scope.
 **Step 1 — Identify target accounts**
 
 Pull target accounts from two sources:
-1. `<data_dir>/feed/sources.json` — entries with `type: x_profile` or `type: linkedin_profile`
+1. `<data_dir>/feed/sources.json` — entries with `type: x_profile`
 2. `<data_dir>/knowledge/index.md` — the "Influencers & Thought Leaders" tables (Name + Platform columns)
 
 Combine into a single candidate list. Prioritise accounts that appear in both sources — these are most relevant to the user's niche.

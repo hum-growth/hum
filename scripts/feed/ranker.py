@@ -41,8 +41,6 @@ def _prefer_longform_for_post(post: dict, feed_config: dict) -> bool:
     source = post.get("source", "")
     if source == "x":
         return feed_config.get("x_feed", {}).get("prefer_longform", False)
-    if source in ("linkedin", "linkedin_feed"):
-        return feed_config.get("linkedin_feed", {}).get("prefer_longform", False)
     return False
 
 

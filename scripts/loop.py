@@ -23,6 +23,7 @@ import json
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -99,10 +100,11 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
 def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
     """Fetch feeds, rank, format digest.
 
-    Browser-based sources (X, HN, PH) emit JSON instructions to stdout.
-    The agent running this script should read those instructions and execute
-    them via its browser tool, saving results to feeds_file before the
-    ranker/digest steps run.
+    All sources fetch directly via API/subprocess — no browser automation.
+      - HN: Algolia API (step 1a)
+      - X profiles: Bird API (from:handle) (step 1b)
+      - X home feed: Bird API (filter:follows) (step 1c)
+      - YouTube: yt-dlp (step 1d)
     """
     feed_raw = _CFG["feed_raw"]
     feeds_file = str(_CFG["feeds_file"])
@@ -138,12 +140,20 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
         except (json.JSONDecodeError, OSError) as exc:
             print(f"[loop] Could not merge HN feed: {exc}", file=sys.stderr)
 
-    # Step 1b: Emit browser scraping instructions for X/Twitter feed.
-    # The agent must execute these via browser tool and save to feeds_file.
+    # Step 1b: Crawl X profile sources via Bird API (direct, no browser needed).
+    # Falls back silently to browser instructions if credentials are absent.
     _, _ = run_step(
-        "X/Twitter feed — browser instructions (agent must execute)",
+        "X profiles — Bird API (incremental)",
         [sys.executable, str(feed_dir / "refresh.py"),
-         "--output", feeds_file],
+         "--type", "x_profile", "--output", feeds_file],
+        allow_fail=True,
+    )
+
+    # Step 1c: Fetch X home feed via Bird (filter:follows). Direct, no browser.
+    _, _ = run_step(
+        "X home feed — Bird filter:follows",
+        [sys.executable, str(feed_dir / "refresh.py"), "--type", "x_feed"],
+        allow_fail=True,
     )
 
     # Step 1d: Fetch YouTube creator updates (direct via yt-dlp).

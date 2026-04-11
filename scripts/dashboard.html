@@ -163,8 +163,6 @@
       <select id="add-type">
         <option value="x_feed">X — home feed</option>
         <option value="x_profile">X — individual profile</option>
-        <option value="linkedin_feed">LinkedIn — home feed</option>
-        <option value="linkedin">LinkedIn — individual profile</option>
         <option value="youtube">YouTube channel</option>
         <option value="website">Website</option>
       </select>
@@ -446,9 +444,9 @@ function esc(s) {
 }
 
 // ── Sources rendering ──────────────────────────────────────────────────────
-const TYPE_LABELS = { x_feed: 'X Feed', x_profile: 'X Profiles', linkedin_feed: 'LinkedIn Feed', linkedin_profile: 'LinkedIn Profiles', youtube: 'YouTube', website: 'Websites' };
-const TYPE_ORDER = ['x_feed', 'x_profile', 'linkedin_feed', 'linkedin_profile', 'youtube', 'website'];
-const SINGLETON_TYPES = new Set(['x_feed', 'linkedin_feed']);
+const TYPE_LABELS = { x_feed: 'X Feed', x_profile: 'X Profiles', youtube: 'YouTube', website: 'Websites' };
+const TYPE_ORDER = ['x_feed', 'x_profile', 'youtube', 'website'];
+const SINGLETON_TYPES = new Set(['x_feed']);
 
 function renderSources() {
   const grouped = {};
@@ -529,12 +527,6 @@ addSourceBtn.addEventListener('click', async () => {
       if (!handle || !/^[A-Za-z0-9_]{1,50}$/.test(handle)) { showErr('Invalid X handle'); return; }
       if (sources.feed_sources.some(s => s.type === 'x_profile' && s.handle?.toLowerCase() === handle.toLowerCase())) { showErr('@' + handle + ' already added'); return; }
       entry = { type: 'x_profile', handle, category: extra, description: '', last_crawled: null };
-    } else if (type === 'linkedin') {
-      const clean = value.split('?')[0].replace(/\/$/, '');
-      if (!clean.includes('linkedin.com/in/')) { showErr('Enter a full LinkedIn profile URL'); return; }
-      if (sources.feed_sources.some(s => s.type === 'linkedin_profile' && s.url?.toLowerCase() === clean.toLowerCase())) { showErr('Profile already added'); return; }
-      const name = extra || clean.split('/in/')[1] || clean;
-      entry = { type: 'linkedin_profile', url: clean, name, category: '', description: '', last_crawled: null };
     } else if (type === 'youtube') {
       if (!value.includes('youtube.com') && !value.includes('youtu.be') && !value.startsWith('@')) { showErr('Enter a YouTube URL or @handle'); return; }
       if (sources.feed_sources.some(s => s.type === 'youtube' && s.url === value)) { showErr('Already added'); return; }

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-sources.py — Manage feed sources (X profiles, LinkedIn profiles, YouTube, websites).
+sources.py — Manage feed sources (X profiles, YouTube, websites).
 
 Usage:
-    python3 sources.py list [--type x_profile|linkedin_profile|youtube|website]
+    python3 sources.py list [--type x_profile|youtube|website]
     python3 sources.py add x <handle> [category]
-    python3 sources.py add linkedin <url> [name]
     python3 sources.py add youtube <url> [name]
     python3 sources.py add website <name> <url>
     python3 sources.py remove <handle_or_name_or_url>
@@ -22,7 +21,7 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 
-SOURCE_TYPES = ("x_feed", "x_profile", "linkedin_feed", "linkedin_profile", "youtube", "website")
+SOURCE_TYPES = ("x_feed", "x_profile", "youtube", "website")
 
 
 def load_sources(path: Path) -> dict:
@@ -34,7 +33,7 @@ def load_sources(path: Path) -> dict:
             return {"feed_sources": []}
         # Ensure prefer_longform defaults to False for feed types
         for entry in data["feed_sources"]:
-            if entry.get("type") in ("x_feed", "linkedin_feed"):
+            if entry.get("type") == "x_feed":
                 entry.setdefault("prefer_longform", False)
         return data
     return {"feed_sources": []}
@@ -59,11 +58,9 @@ def update_last_crawled(sources: dict, source_type: str, identifier: str, timest
             continue
         if source_type == "x_profile" and s.get("handle", "").lower() == identifier.lower():
             s["last_crawled"] = ts
-        elif source_type == "linkedin_profile" and s.get("url", "").rstrip("/").lower() == identifier.rstrip("/").lower():
-            s["last_crawled"] = ts
         elif source_type == "youtube" and s.get("url", "").lower() == identifier.lower():
             s["last_crawled"] = ts
-        elif source_type in ("x_feed", "linkedin_feed"):
+        elif source_type == "x_feed":
             s["last_crawled"] = ts
 
 
@@ -81,17 +78,10 @@ def cmd_list(sources: dict, filter_type: str | None = None):
             if st == "x_feed":
                 pa = " [prefer_longform]" if s.get("prefer_longform") else ""
                 print(f"  {s.get('description', 'X home feed')}{pa}{crawled}")
-            elif st == "linkedin_feed":
-                pa = " [prefer_longform]" if s.get("prefer_longform") else ""
-                print(f"  {s.get('description', 'LinkedIn home feed')}{pa}{crawled}")
             elif st == "x_profile":
                 cat = f" [{s['category']}]" if s.get("category") else ""
                 desc = f" -- {s['description']}" if s.get("description") else ""
                 print(f"  @{s['handle']}{cat}{desc}{crawled}")
-            elif st == "linkedin_profile":
-                name = s.get("name", "")
-                desc = f" -- {s['description']}" if s.get("description") else ""
-                print(f"  {name} ({s['url']}){desc}{crawled}")
             elif st == "youtube":
                 print(f"  {s.get('name', '?')} -- {s['url']}{crawled}")
             elif st == "website":
@@ -118,28 +108,6 @@ def cmd_add(sources: dict, args) -> bool:
         }
         sources["feed_sources"].append(entry)
         print(f"Added x_profile: @{handle}")
-        return True
-
-    elif args.source_type == "linkedin":
-        url = args.value.rstrip("/")
-        if "linkedin.com/in/" not in url:
-            print(f"Error: invalid handle/URL: '{args.value}'", file=sys.stderr)
-            return False
-        existing = get_by_type(sources, "linkedin_profile")
-        if any(s["url"].rstrip("/").lower() == url.lower() for s in existing):
-            print(f"{url} already exists.")
-            return False
-        name = " ".join(args.extra) if args.extra else url.split("/in/")[-1].rstrip("/")
-        entry = {
-            "type": "linkedin_profile",
-            "url": url,
-            "name": name,
-            "category": "",
-            "description": "",
-            "last_crawled": None,
-        }
-        sources["feed_sources"].append(entry)
-        print(f"Added linkedin_profile: {name} ({url})")
         return True
 
     elif args.source_type == "youtube":
@@ -197,11 +165,6 @@ def cmd_remove(sources: dict, target: str) -> bool:
         match = False
         if s["type"] == "x_profile" and s.get("handle", "").lower() == target_lower:
             match = True
-        elif s["type"] == "linkedin_profile" and (
-            s.get("url", "").rstrip("/").lower() == target_lower
-            or s.get("name", "").lower() == target_lower
-        ):
-            match = True
         elif s["type"] == "youtube" and (
             s.get("name", "").lower() == target_lower or s.get("url", "").lower() == target_lower
         ):
@@ -227,9 +190,9 @@ def main():
     list_p.add_argument("--type", choices=SOURCE_TYPES, default=None, help="Filter by type")
 
     add_p = sub.add_parser("add", help="Add a source")
-    add_p.add_argument("source_type", choices=["x", "linkedin", "youtube", "website"])
+    add_p.add_argument("source_type", choices=["x", "youtube", "website"])
     add_p.add_argument("value", help="Handle, URL, or name")
-    add_p.add_argument("extra", nargs="*", help="Category (x), name (linkedin/youtube), or URL (website)")
+    add_p.add_argument("extra", nargs="*", help="Category (x), name (youtube), or URL (website)")
 
     rm_p = sub.add_parser("remove", help="Remove a source")
     rm_p.add_argument("target", help="Handle, name, or URL to remove")

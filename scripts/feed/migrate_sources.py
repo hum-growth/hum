@@ -20,11 +20,11 @@ from config import load_config
 def migrate(sources: dict) -> dict:
     feed_sources = []
 
-    # X browser feed (always present as a meta-source)
+    # X home feed (always present as a meta-source; fetched via Bird filter:follows)
     feed_sources.append({
-        "type": "x_browser",
-        "enabled": True,
-        "description": "X home feed via browser scrolling",
+        "type": "x_feed",
+        "description": "X home feed",
+        "prefer_longform": False,
         "last_crawled": None,
     })
 
