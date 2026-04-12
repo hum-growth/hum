@@ -2,6 +2,9 @@
 data/
 credentials/
 
+# Python venv
+venv/
+
 # Runtime
 __pycache__/
 *.pyc

@@ -24,9 +24,20 @@ Hum handles the full content lifecycle: crawls your feed sources daily and sends
 | `/hum samples` | Collect writing samples from social media |
 | `/hum feedback` | Upvote/downvote digest items |
 
+## Python Environment
+
+All scripts run inside a venv at `venv/` in the repo root. Always use `venv/bin/python3` (not system `python3`) when running scripts directly. To set up:
+
+```bash
+bash setup.sh
+```
+
+This creates `venv/` and installs all deps from `requirements.txt`. The venv is not committed to git.
+
 ## Setup
 
-1. Run `/hum init` to create all directories and template files
+1. Run `bash setup.sh` to create the venv and install dependencies
+2. Run `/hum init` to create all directories and template files
 2. Edit the generated files in your data directory:
    - `VOICE.md` — your writing style and tone
    - `AUDIENCE.md` — who you write for

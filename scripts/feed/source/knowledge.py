@@ -22,6 +22,7 @@ Requirements:
 import re
 import sys
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Dict
 
@@ -134,11 +135,17 @@ def crawl_source(source: dict, max_articles: int = 0, recrawl: bool = False) -> 
         return 0
 
 
-def crawl_all(sources: List[Dict[str, str]], max_articles: int = 0, recrawl: bool = False) -> int:
-    """Crawl all sources and return total new articles saved."""
+def crawl_all(sources: List[Dict[str, str]], max_articles: int = 0, recrawl: bool = False, max_workers: int = 6) -> int:
+    """Crawl all sources in parallel and return total new articles saved."""
     total = 0
-    for src in sources:
-        total += crawl_source(src, max_articles=max_articles, recrawl=recrawl)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(crawl_source, s, max_articles, recrawl): s for s in sources}
+        for future in as_completed(futures):
+            try:
+                total += future.result()
+            except Exception as e:
+                src = futures[future]
+                print(f"   ! [{src['key']}] unexpected error: {e}")
     return total
 
 
@@ -196,6 +203,7 @@ def new_articles_as_feed_items(sources: List[Dict[str, str]], since: str = "") -
                 "replies": 0,
                 "views": 0,
                 "knowledge_source": src["key"],
+                "knowledge_file": f.name,
             })
     return items
 

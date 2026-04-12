@@ -224,6 +224,8 @@ def main():
 
     print(f"\nDone. Edit the files in {data_dir} to set up your profile.")
     print(f"Open {data_dir}/dashboard.html in Chrome or Edge to browse your feed.")
+    print(f"\nNext: install Python dependencies by running:")
+    print(f"  bash setup.sh")
 
 
 if __name__ == "__main__":

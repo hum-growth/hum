@@ -3,7 +3,7 @@ name: hum
 description: Your AI content writer for X and LinkedIn. Hum handles the full content lifecycle: crawls your feed sources daily and sends a digest, brainstorms ideas grounded in real research across YouTube, X, Reddit, HN, and the web, then drafts posts in your voice using proven writing styles — from technical storytelling to contrarian takes. Every draft goes through a research → outline → approval loop before writing begins. Once approved, Hum publishes directly via API and manages engagement by drafting replies and suggesting accounts to follow.
 ---
 
-1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md, knowledge/index.md) and folders
+1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md, knowledge/index.md) and folders. After running init.py, also run `bash setup.sh` from the repo root to create the venv and install Python dependencies. All subsequent scripts require the venv (`venv/bin/python3`).
 3. **Refresh feed** — `/hum refresh-feed` fetches your X home feed (via Bird `filter:follows`), configured X profiles, Hacker News, YouTube, and knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) — all via direct APIs with no browser automation. Ranks items, sends a digest to Telegram, saves aggregated data to `feeds.json`
 4. **Crawl knowledge** — `/hum crawl` independently crawls knowledge sources defined in `knowledge/index.md`. Saves full articles to `knowledge/<source>/`. Also runs as part of refresh-feed.
 5. **Manage sources** — `/hum sources` adds, removes, and lists social/ephemeral feed sources in `sources.json`

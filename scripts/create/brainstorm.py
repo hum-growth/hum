@@ -56,7 +56,7 @@ def load_weights() -> dict:
 
 def score_post(post: dict, pillars: dict[str, list[str]], weights: dict) -> tuple[int, list[str]]:
     """Score a post against all pillars. Returns (score, matched_pillar_names)."""
-    text = (post.get("text") or post.get("title") or "").lower()
+    text = (post.get("content") or post.get("text") or post.get("title") or "").lower()
     kw_weight = weights["keyword_weight"]
     matched_pillars = []
     total_hits = 0
