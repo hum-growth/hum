@@ -186,7 +186,7 @@ def build_feed_items(creators: List[Dict[str, str]], days: int, max_videos: int)
             unique_by_id[video_id] = item
 
     videos = list(unique_by_id.values())
-    videos.sort(key=lambda item: (item.get("date", ""), item.get("engagement", {}).get("views", 0)), reverse=True)
+    videos.sort(key=lambda item: (item.get("date", ""), item.get("engagement", {}).get("views") or 0), reverse=True)
 
     transcripts = youtube_yt.fetch_transcripts_parallel(
         [str(item["video_id"]) for item in videos if item.get("video_id")]
@@ -205,19 +205,16 @@ def build_feed_items(creators: List[Dict[str, str]], days: int, max_videos: int)
         feed_items.append({
             "source": "youtube",
             "author": item.get("channel_name") or item.get("creator_name") or "",
-            "channel_name": item.get("channel_name") or item.get("creator_name") or "",
             "title": title,
-            "text": body_text,
-            "summary": summary,
-            "highlights": highlights,
+            "content": body_text,
+            "post_type": "video",
             "url": item.get("url", ""),
             "topics": topics,
-            "published": item.get("date", ""),
+            "timestamp": item.get("date", ""),
             "views": item.get("engagement", {}).get("views", 0),
             "likes": item.get("engagement", {}).get("likes", 0),
-            "engagement": item.get("engagement", {}),
+            "replies": item.get("engagement", {}).get("comments", 0),
             "duration": item.get("duration"),
-            "transcript_snippet": transcript,
         })
 
     return feed_items

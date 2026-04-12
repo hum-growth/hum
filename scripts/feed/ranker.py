@@ -47,11 +47,10 @@ def _prefer_longform_for_post(post: dict, feed_config: dict) -> bool:
 def score_post(post: dict, prefs: dict, feed_config: dict | None = None) -> float:
     author = post.get("author", "")
     topics = post.get("topics", [])
-    text = post.get("text", "") or post.get("summary", "") or post.get("title", "")
+    text = post.get("content", "") or post.get("title", "")
     likes = parse_likes(post.get("likes", 0))
     if post.get("source") == "youtube":
-        engagement = post.get("engagement", {}) or {}
-        likes = int(engagement.get("views", post.get("views", likes)) or likes)
+        likes = int(post.get("views", likes) or likes)
 
     # Base score: log scale of likes
     base = math.log(likes + 2)
@@ -131,7 +130,7 @@ def main():
     if args.verbose:
         print(f"Ranked {len(scored)} posts:")
         for p in scored:
-            print(f"  [{p['_score']:.2f}] {p['author']}: {p['text'][:60]}...")
+            print(f"  [{p['_score']:.2f}] {p['author']}: {(p.get('content') or p.get('title', ''))[:60]}...")
 
     print(f"✅ Ranked {len(scored)} posts → {args.output}")
 

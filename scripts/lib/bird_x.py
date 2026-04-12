@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 _BIRD_SEARCH_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-search.mjs"
+_BIRD_DETAIL_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-tweet-detail.mjs"
+_BIRD_FOLLOW_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-follow.mjs"
 
 _credentials: dict[str, str] = {}
 
@@ -50,6 +52,97 @@ def is_available() -> bool:
     if not shutil.which("node"):
         return False
     return _has_credentials()
+
+
+def _run_detail(tweet_id: str, timeout: int = 20) -> dict[str, Any]:
+    """Run bird-tweet-detail.mjs for a single tweet and return parsed JSON."""
+    if not _BIRD_DETAIL_MJS.exists() or not shutil.which("node"):
+        return {"error": "bird-tweet-detail.mjs not found or node not in PATH"}
+    cmd = ["node", str(_BIRD_DETAIL_MJS), tweet_id]
+    preexec = os.setsid if hasattr(os, "setsid") else None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=preexec,
+            env=_subprocess_env(),
+        )
+        try:
+            stdout, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+            proc.wait(timeout=5)
+            return {"error": f"timed out after {timeout}s"}
+        output = (stdout or "").strip()
+        return json.loads(output) if output else {"error": "empty response"}
+    except json.JSONDecodeError as e:
+        return {"error": f"invalid JSON: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def follow_accounts(handles: list[str], timeout: int = 30) -> list[dict]:
+    """Follow X accounts by handle via CreateFriendship GraphQL.
+
+    Args:
+        handles: List of X handles (with or without @)
+        timeout: Seconds before giving up per request
+
+    Returns:
+        List of dicts with keys: handle, success, userId (if resolved), error (if failed)
+    """
+    if not _BIRD_FOLLOW_MJS.exists() or not shutil.which("node"):
+        return [{"handle": h, "success": False, "error": "bird-follow.mjs not found or node not in PATH"} for h in handles]
+
+    cmd = ["node", str(_BIRD_FOLLOW_MJS)] + handles
+    preexec = os.setsid if hasattr(os, "setsid") else None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=preexec,
+            env=_subprocess_env(),
+        )
+        try:
+            stdout, _ = proc.communicate(timeout=timeout * len(handles))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+            proc.wait(timeout=5)
+            return [{"handle": h, "success": False, "error": "timed out"} for h in handles]
+        output = (stdout or "").strip()
+        data = json.loads(output) if output else {}
+        return data.get("results", [])
+    except json.JSONDecodeError as e:
+        return [{"handle": h, "success": False, "error": f"invalid JSON: {e}"} for h in handles]
+    except Exception as e:
+        return [{"handle": h, "success": False, "error": str(e)} for h in handles]
+
+
+def fetch_article(tweet_id: str, timeout: int = 20) -> dict | None:
+    """Fetch a tweet's full article body via TweetResultByRestId GraphQL.
+
+    Args:
+        tweet_id: Tweet ID (the tweet that links to or is the article)
+        timeout: Seconds before giving up
+
+    Returns:
+        Dict with keys: title, body, summary — or None if not an article / fetch failed.
+    """
+    result = _run_detail(tweet_id, timeout=timeout)
+    if result.get("error") or not result.get("success"):
+        return None
+    tweet = result.get("tweet") or {}
+    return tweet.get("article")  # {title, body, summary} or None
 
 
 def _run(query: str, count: int, timeout: int) -> dict[str, Any]:
@@ -113,11 +206,7 @@ def _is_thread_start(text: str) -> bool:
 
 
 def _normalize(raw_items: list[dict], handle: str = "") -> list[dict]:
-    """Convert raw Bird tweet objects to hum feed item format.
-
-    Thread-start tweets are flagged with is_thread_start=True and thread_url
-    so the caller (or agent) can fetch the full thread via browser.
-    """
+    """Convert raw Bird tweet objects to hum feed item format."""
     items = []
     for tweet in raw_items:
         if not isinstance(tweet, dict):
@@ -152,24 +241,44 @@ def _normalize(raw_items: list[dict], handle: str = "") -> list[dict]:
             author.get("username") or author.get("screen_name", "") or handle
         ).lstrip("@")
 
-        text = str(tweet.get("text") or tweet.get("full_text") or "").strip()
+        # Skip replies to other people's tweets
+        tweet_id = str(tweet.get("id") or tweet.get("id_str") or "")
+        in_reply_to = str(tweet.get("inReplyToStatusId") or tweet.get("in_reply_to_status_id") or "")
+        conversation_id = str(tweet.get("conversationId") or tweet.get("conversation_id") or "")
+        if in_reply_to and conversation_id and conversation_id != tweet_id:
+            continue
 
-        is_thread = _is_thread_start(text)
+        content = str(tweet.get("text") or tweet.get("full_text") or "").strip()
+
+        # Detect article tweets via card name or explicit article URL in content
+        card = tweet.get("card") or tweet.get("cardByUrl") or {}
+        card_name = str(card.get("name") or card.get("card_name") or "")
+        is_article = "article" in card_name.lower() or "x.com/i/articles" in content
+
+        is_thread = _is_thread_start(content)
+
+        if is_thread:
+            post_type = "thread"
+        elif is_article:
+            post_type = "article"
+        else:
+            post_type = "tweet"
+
         item = {
             "source": "x",
             "author": f"@{author_handle}",
-            "text": text[:500],
+            "content": content,
+            "post_type": post_type,
             "url": url,
             "timestamp": date,
-            "likes": _int(tweet.get("likeCount") or tweet.get("like_count") or tweet.get("favorite_count")),
-            "retweets": _int(tweet.get("retweetCount") or tweet.get("retweet_count")),
-            "replies": _int(tweet.get("replyCount") or tweet.get("reply_count")),
-            "views": _int(tweet.get("viewCount") or tweet.get("view_count")),
+            "likes": _int(tweet.get("likeCount") or tweet.get("like_count") or tweet.get("favorite_count")) or 0,
+            "retweets": _int(tweet.get("retweetCount") or tweet.get("retweet_count")) or 0,
+            "replies": _int(tweet.get("replyCount") or tweet.get("reply_count")) or 0,
+            "views": _int(tweet.get("viewCount") or tweet.get("view_count")) or 0,
             "media": [],
         }
-        if is_thread:
-            item["is_thread_start"] = True
-            item["thread_url"] = url
+        if tweet_id:
+            item["tweet_id"] = tweet_id
         items.append(item)
     return items
 
@@ -181,6 +290,65 @@ def _int(val: Any) -> int | None:
         return int(val)
     except (ValueError, TypeError):
         return None
+
+
+def fetch_thread(tweet_id: str, handle: str, count: int = 50, timeout: int = 30) -> list[dict]:
+    """Fetch all tweets in a thread by querying conversation_id via Bird.
+
+    Args:
+        tweet_id: ID of the first tweet in the thread
+        handle: Author handle (without @) — used to filter to only their replies
+        count: Max tweets to fetch (default 50)
+        timeout: Seconds before giving up
+
+    Returns:
+        List of normalized hum feed items in chronological order, or empty list on failure.
+    """
+    handle = handle.lstrip("@")
+    query = f"conversation_id:{tweet_id} from:{handle}"
+    response = _run(query, count, timeout)
+
+    if isinstance(response, dict) and response.get("error"):
+        return []
+
+    raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
+    tweets = _normalize(raw if isinstance(raw, list) else [], handle=handle)
+    # Sort chronologically (oldest first) so we can stitch in order
+    tweets.sort(key=lambda t: t.get("timestamp") or "")
+    return tweets
+
+
+def fetch_thread_as_item(tweet_id: str, handle: str, seed_item: dict, timeout: int = 30) -> dict:
+    """Fetch a full thread and return a single merged feed item.
+
+    Stitches all thread tweets into one item with combined text and summed stats.
+    Falls back to the seed_item unchanged if thread fetch fails.
+
+    Args:
+        tweet_id: ID of the first tweet in the thread
+        handle: Author handle (without @)
+        seed_item: The original feed item for the thread-start tweet
+        timeout: Seconds before giving up
+
+    Returns:
+        A single merged feed item representing the full thread.
+    """
+    tweets = fetch_thread(tweet_id, handle, timeout=timeout)
+    if not tweets:
+        return seed_item
+
+    full_content = "\n\n".join(t["content"] for t in tweets if t.get("content"))
+
+    return {
+        **seed_item,
+        "content": full_content,
+        "post_type": "thread",
+        "tweet_count": len(tweets),
+        "likes": sum(t.get("likes") or 0 for t in tweets),
+        "retweets": sum(t.get("retweets") or 0 for t in tweets),
+        "replies": sum(t.get("replies") or 0 for t in tweets),
+        "views": sum(t.get("views") or 0 for t in tweets),
+    }
 
 
 def fetch_profile(handle: str, since: str | None = None, count: int = 20, timeout: int = 30) -> list[dict]:
@@ -203,14 +371,14 @@ def fetch_profile(handle: str, since: str | None = None, count: int = 20, timeou
 
     response = _run(query, count, timeout)
 
-    if response.get("error"):
+    if isinstance(response, dict) and response.get("error"):
         return []
 
     raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
     return _normalize(raw if isinstance(raw, list) else [], handle=handle)
 
 
-def fetch_home_feed(since: str | None = None, count: int = 40, timeout: int = 45) -> list[dict]:
+def fetch_home_feed(since: str | None = None, count: int = 100, timeout: int = 90) -> list[dict]:
     """Fetch tweets from followed accounts via Bird (X search with filter:follows).
 
     Uses the X search operator 'filter:follows' to restrict results to accounts
@@ -231,7 +399,7 @@ def fetch_home_feed(since: str | None = None, count: int = 40, timeout: int = 45
 
     response = _run(query, count, timeout)
 
-    if response.get("error"):
+    if isinstance(response, dict) and response.get("error"):
         return []
 
     raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))

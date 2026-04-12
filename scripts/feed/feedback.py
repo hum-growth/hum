@@ -92,7 +92,7 @@ def log_vote(item_num: int, vote: str):
     post = last_digest[key]
     author = post.get("author", "")
     topics = post.get("topics", [])
-    text = post.get("text", "")
+    text = post.get("content", "") or post.get("title", "")
     url = post.get("url", "")
     keywords = extract_keywords(text)
     direction = 1 if vote == "up" else -1

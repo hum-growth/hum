@@ -54,8 +54,7 @@ def post_sort_key(post: dict) -> tuple:
     if "_score" in post:
         return (3, float(post.get("_score", 0)))
     if post.get("source") == "youtube":
-        engagement = post.get("engagement", {}) or {}
-        return (2, int(engagement.get("views", post.get("views", 0)) or 0))
+        return (2, int(post.get("views", 0) or 0))
     return (1, parse_likes(post.get("likes", 0)))
 
 
@@ -86,7 +85,7 @@ def is_seen(post: dict, history: dict) -> bool:
         return True
     # Story-level fingerprint check: require strong overlap (7+ words) to avoid
     # flagging legitimately different stories that share a few common words
-    fp = make_story_fingerprint(post.get("text", ""))
+    fp = make_story_fingerprint(post.get("content", "") or post.get("title", ""))
     fp_words = set(fp.split())
     if len(fp_words) >= 4:
         for key in history:
@@ -104,7 +103,7 @@ def mark_seen(post: dict, history: dict):
     url = post.get("url", "")
     if url:
         history[url] = now
-    fp = make_story_fingerprint(post.get("text", ""))
+    fp = make_story_fingerprint(post.get("content", "") or post.get("title", ""))
     if fp:
         history[f"fp:{fp}"] = now
 
@@ -155,14 +154,14 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
             url = p.get("url", "")
             if p.get("source") == "youtube":
                 title = truncate(p.get("title", ""), 110)
-                summary = truncate(p.get("summary") or p.get("text", ""))
-                published = p.get("published", "")
-                date_suffix = f" ({published})" if published else ""
+                summary = truncate(p.get("content", ""))
+                published = p.get("timestamp", "")
+                date_suffix = f" ({published[:10]})" if published else ""
                 lines.append(f"{counter}. ▶ {author}: {title}{date_suffix}")
                 if summary:
                     lines.append(f"   {summary}")
             else:
-                text = truncate(p.get("text", ""))
+                text = truncate(p.get("content", "") or p.get("title", ""))
                 lines.append(f"{counter}. {author}: {text}")
             if url:
                 lines.append(f"   {url}")
@@ -179,11 +178,11 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
             url = p.get("url", "")
             if p.get("source") == "youtube":
                 title = truncate(p.get("title", ""), 110)
-                published = p.get("published", "")
-                date_suffix = f" ({published})" if published else ""
+                published = p.get("timestamp", "")
+                date_suffix = f" ({published[:10]})" if published else ""
                 lines.append(f"{counter}. ▶ {author}: {title}{date_suffix}")
             else:
-                text = truncate(p.get("text", "") or p.get("title", ""))
+                text = truncate(p.get("content", "") or p.get("title", ""))
                 lines.append(f"{counter}. {author}: {text}")
             if url:
                 lines.append(f"   {url}")

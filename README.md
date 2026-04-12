@@ -90,14 +90,17 @@ If `hum_digest_target` is not set, the daily loop will skip digest delivery and 
 
 ### 3. Setup workspace and content profile
 
-Run `/hum init` to create all required directories and template files. Then edit the generated files in your data directory to set up your voice, audience, channels, and content pillars.
+Run `/hum init` to create all required directories and template files. Then edit the generated files in your data directory to set up your voice, audience, channels, content pillars, and knowledge sources (`knowledge/index.md`).
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/hum refresh-feed` | Crawl sources, rank, send digest, save to feeds.json |
-| `/hum sources` | List, add, or remove feed sources |
+| `/hum init` | Set up data directory with templates and folders |
+| `/hum loop` | Run the full daily morning workflow |
+| `/hum refresh-feed` | Crawl all sources (X, HN, YouTube, knowledge), rank, send digest |
+| `/hum crawl` | Crawl knowledge sources (blogs, YouTube transcripts, podcasts) |
+| `/hum sources` | List, add, or remove social feed sources |
 | `/hum config` | Show current data_dir configuration |
 | `/hum brainstorm` | Research topics and generate content ideas |
 | `/hum learn` | Make improvements to content strategy |
@@ -214,7 +217,7 @@ Alternatively, use the `/loop` skill if available in your Claude Code session:
 /loop 24h /hum refresh-feed
 ```
 
-> **Note:** The crontab approach requires Claude Code CLI (`claude`) to be installed and authenticated. The session runs headless — browser-based feed sources (X, LinkedIn, Product Hunt) will be skipped unless a browser session is available.
+> **Note:** The crontab approach requires Claude Code CLI (`claude`) to be installed and authenticated. All core feed sources (X via Bird, HN, YouTube, knowledge) run headless — no browser needed.
 
 #### Codex
 
@@ -245,15 +248,21 @@ python3 scripts/loop.py
 
 ## Feed
 
-All feed sources use browser automation — the agent scrolls and extracts content via the browser tool. No API keys are required for feed crawling.
+Most feed sources use direct APIs — no browser automation required. X credentials are session cookies extracted once from browser devtools.
 
-| Source | Method | API Key | Cost |
-|--------|--------|---------|------|
-| **X home feed** | Browser scrolling | None (browser session) | Free |
-| **LinkedIn home feed** | Browser automation | None (browser session) | Free |
-| **YouTube** | yt-dlp (local tool) | None | Free |
+| Source | Method | Credentials | Cost |
+|--------|--------|-------------|------|
+| **X home feed** | Bird API (`filter:follows`) | `AUTH_TOKEN` + `CT0` cookies | Free |
+| **X profiles** | Bird API (`from:handle`) | `AUTH_TOKEN` + `CT0` cookies | Free |
 | **Hacker News** | Algolia public API | None | Free |
-| **Product Hunt** | Browser scrolling | None (browser session) | Free |
+| **YouTube** (digest) | yt-dlp (local tool) | None | Free |
+| **Knowledge sources** | RSS, sitemaps, YouTube transcripts, podcasts | None | Free |
+
+X credentials go in `~/.hum/credentials/x.json` or via `HUM_X_AUTH_TOKEN` / `HUM_X_CT0` env vars. If missing, X sources are skipped and the rest of the pipeline still runs.
+
+Two source lists serve different purposes:
+- `feed/sources.json` — Social/ephemeral sources (X feed, X profiles, HN, YouTube channels). Managed via `/hum sources`.
+- `knowledge/index.md` — Long-form knowledge sources (RSS blogs, sitemaps, YouTube transcripts, podcasts). Full articles saved to `knowledge/<source_key>/`.
 
 ## Image Generation
 
@@ -313,6 +322,18 @@ python3 scripts/lib/image-gen/generate.py \
   --prompt "a clean professional image for a finance tech tweet" \
   --platform twitter --output /tmp/test.png
 ```
+
+## Dashboard
+
+Browse all your hum data in a local web UI — feed, knowledge articles, ideas, content drafts, loop runs, and learnings.
+
+```bash
+python3 scripts/dashboard/serve.py          # http://localhost:8400
+python3 scripts/dashboard/serve.py --open   # auto-open browser
+python3 scripts/dashboard/serve.py --port 9000  # custom port
+```
+
+The server indexes your knowledge articles at startup (cached to `knowledge/_index.json`). Use `--rebuild-index` to force a fresh scan.
 
 ## Local Development
 

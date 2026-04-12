@@ -28,6 +28,7 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
+from feed.schema import normalize_item
 from feed.sources import load_sources, save_sources, get_by_type, update_last_crawled
 from feed.source.x import (
     profile_instructions as x_profile_instructions,
@@ -35,6 +36,8 @@ from feed.source.x import (
     fetch_home_feed_via_bird,
 )
 from feed.source.hn import fetch_hn
+from feed.source.knowledge import load_sources as load_knowledge_sources, crawl_all as crawl_knowledge, new_articles_as_feed_items
+from lib import bird_x as _bird
 
 _CFG = load_config()
 DEFAULT_OUTPUT = str(_CFG["feeds_file"])
@@ -69,14 +72,40 @@ def _merge_into_feeds(feeds_path: Path, new_items: list[dict]) -> None:
             existing = []
 
     existing_urls = {p.get("url") for p in existing if p.get("url")}
-    added = [item for item in new_items if item.get("url") not in existing_urls]
-    merged = existing + added
+    added = [normalize_item(item) for item in new_items if item.get("url") not in existing_urls]
+    merged = [normalize_item(p) for p in existing] + added
 
     feeds_path.parent.mkdir(parents=True, exist_ok=True)
     feeds_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
 
-def refresh_x_feed(count: int = 40) -> list[dict]:
+def _expand_threads(items: list[dict]) -> list[dict]:
+    """Expand thread-start and article items via Bird direct API calls."""
+    expanded = []
+    for item in items:
+        tweet_id = item.get("tweet_id")
+
+        if item.get("post_type") == "article" and tweet_id:
+            article = _bird.fetch_article(tweet_id)
+            if article:
+                print(f"  Article fetched: {article.get('title', '')[:60]} ({len(article.get('body') or '')} chars)")
+                expanded.append({**item, "article": article, "content": article.get("body") or item.get("content", "")})
+            else:
+                expanded.append(item)
+
+        elif item.get("post_type") == "thread" and tweet_id:
+            handle = item["author"].lstrip("@")
+            merged = _bird.fetch_thread_as_item(tweet_id, handle, seed_item=item)
+            if merged is not item:
+                print(f"  Thread expanded: @{handle} ({merged.get('tweet_count', '?')} tweets)")
+            expanded.append(merged)
+
+        else:
+            expanded.append(item)
+    return expanded
+
+
+def refresh_x_feed(count: int = 100) -> list[dict]:
     """Fetch X home feed via Bird (filter:follows) and merge into feeds.json.
 
     Uses the single 'x_feed' entry in sources.json (if present) for incremental
@@ -95,6 +124,7 @@ def refresh_x_feed(count: int = 40) -> list[dict]:
         return []
 
     print(f"  Bird: fetched {len(items)} tweets from home feed{since_note}")
+    items = _expand_threads(items)
     _merge_into_feeds(feeds_path, items)
     update_last_crawled(sources, "x_feed", "", _now_iso())
     save_sources(sources_file, sources)
@@ -130,6 +160,7 @@ def refresh_x_profiles(sources: dict, output_dir: Path | None = None) -> list[di
         items = fetch_profile_via_bird(handle, since=since)
         if items is not None:
             print(f"  Bird: fetched {len(items)} tweets from @{handle}{since_note}")
+            items = _expand_threads(items)
             _merge_into_feeds(feeds_path, items)
             update_last_crawled(sources, "x_profile", handle, _now_iso())
             continue
@@ -169,11 +200,51 @@ def refresh_hn(
     return items
 
 
+def refresh_knowledge(max_articles: int = 10) -> list[dict]:
+    """Crawl knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts)
+    from knowledge/index.md, save full articles to knowledge/, and generate
+    feed items from newly crawled articles.
+
+    Default max_articles=10 per source keeps the daily refresh fast.
+    Use `python3 -m feed.source.knowledge --all` for full backfills."""
+    feeds_path = Path(_CFG["feeds_file"])
+
+    # Get the latest date already in feeds from knowledge source
+    existing: list[dict] = []
+    if feeds_path.exists():
+        try:
+            existing = json.loads(feeds_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    knowledge_dates = [
+        p.get("timestamp", "") for p in existing
+        if p.get("source") == "knowledge" and p.get("timestamp")
+    ]
+    since = max(knowledge_dates) if knowledge_dates else ""
+
+    # Crawl new articles into knowledge/
+    sources = load_knowledge_sources()
+    if not sources:
+        print("  No knowledge sources found in index.md")
+        return []
+
+    total = crawl_knowledge(sources, max_articles=max_articles)
+    print(f"  Knowledge: crawled {total} new articles across {len(sources)} sources")
+
+    # Generate feed items from newly crawled articles
+    new_items = new_articles_as_feed_items(sources, since=since)
+    if new_items:
+        _merge_into_feeds(feeds_path, new_items)
+        print(f"  Knowledge: {len(new_items)} new feed items merged")
+
+    return new_items
+
+
 def main():
     parser = argparse.ArgumentParser(description="Refresh feed sources")
     parser.add_argument(
         "--type",
-        choices=["x_feed", "x_profile", "hn", "all"],
+        choices=["x_feed", "x_profile", "hn", "knowledge", "all"],
         default="all",
         help="Source type to crawl (default: all)",
     )
@@ -211,6 +282,11 @@ def main():
         if args.type == "hn":
             print(json.dumps(hn_items, indent=2))
 
+    # knowledge — RSS, sitemaps, YouTube transcripts, podcasts from index.md
+    if args.type in ("knowledge", "all"):
+        knowledge_items = refresh_knowledge()
+        results["knowledge"] = knowledge_items
+
     # Write source config for the ranker (prefer_longform etc.)
     write_feed_source_config(cfg, sources)
 
@@ -227,6 +303,8 @@ def main():
         print(f"Fetched: {', '.join(fetched)}.")
     if "hn" in results:
         print(f"HN: {len(results['hn'])} stories merged into {args.output}.")
+    if "knowledge" in results:
+        print(f"Knowledge: {len(results['knowledge'])} new feed items from knowledge sources.")
 
     return results
 

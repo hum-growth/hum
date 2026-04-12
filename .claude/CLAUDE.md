@@ -9,7 +9,9 @@ Hum handles the full content lifecycle: crawls your feed sources daily and sends
 | Command | What it does |
 |---------|-------------|
 | `/hum init` | Set up data directory with templates |
-| `/hum refresh-feed` | Crawl sources, rank, send digest |
+| `/hum loop` | Run the full daily morning workflow |
+| `/hum refresh-feed` | Crawl all sources, rank, send digest |
+| `/hum crawl` | Crawl knowledge sources (blogs, podcasts, YouTube transcripts) |
 | `/hum sources` | Manage feed sources (X, YouTube, websites) |
 | `/hum config` | Show current configuration |
 | `/hum brainstorm` | Research topics and generate content ideas |
@@ -30,6 +32,7 @@ Hum handles the full content lifecycle: crawls your feed sources daily and sends
    - `AUDIENCE.md` — who you write for
    - `CHANNELS.md` — where you publish, account mappings
    - `CONTENT.md` — content pillars with keywords
+   - `knowledge/index.md` — knowledge sources (blogs, YouTube transcripts, podcasts)
 3. Set up credentials for publishing:
    - Create `~/.hum/credentials/x.json` and/or `linkedin.json`
    - See `COMMANDS.md` for credential format
@@ -41,18 +44,31 @@ Hum handles the full content lifecycle: crawls your feed sources daily and sends
 |----------|---------|---------|
 | `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
 | `CREDENTIALS_DIR` | `~/.hum/credentials/` | API credential files |
-| `X_USER_ACCESS_TOKEN` | (from file) | X API token override |
+| `HUM_X_AUTH_TOKEN` | (from file) | X session AUTH_TOKEN for Bird API |
+| `HUM_X_CT0` | (from file) | X session CT0 cookie for Bird API |
+| `X_USER_ACCESS_TOKEN` | (from file) | X API token override (publishing) |
 | `LINKEDIN_ACCESS_TOKEN` | (from file) | LinkedIn API token override |
 | `LINKEDIN_AUTHOR_URN` | (from file) | LinkedIn author URN override |
+| `HUM_IMAGE_MODEL` | `gemini` | Image generation provider |
 
 ## Architecture
 
 - `scripts/feed/` — Feed crawling, ranking, digest formatting, source management
+- `scripts/feed/source/` — Source-specific crawlers (X via Bird API, HN, YouTube digest)
+- `scripts/feed/source/handlers/` — Knowledge base crawl handlers (RSS, sitemap, YouTube transcripts, podcasts)
+- `scripts/feed/source/knowledge.py` — Knowledge crawler orchestrator (parses `knowledge/index.md`, dispatches handlers)
 - `scripts/create/` — Brainstorming, post type schemas, draft creation
 - `scripts/act/` — Publishing, engagement, analytics
 - `scripts/act/connectors/` — Platform-specific API connectors (X, LinkedIn)
 - `scripts/config.py` — Shared config loader
 - `scripts/loop.py` — Daily automation orchestrator
+
+## Source configuration
+
+Two source lists serve different purposes:
+
+- `feed/sources.json` — Social/ephemeral sources (X feed, X profiles, HN, YouTube channels). Managed via `/hum sources`.
+- `knowledge/index.md` — Long-form knowledge sources (RSS blogs, sitemaps, YouTube transcripts, podcasts). Defined as markdown tables with Key, Handler, Feed URL columns. Full articles saved to `knowledge/<source_key>/` as markdown files with frontmatter.
 
 ## Development
 

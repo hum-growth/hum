@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(~/.claude/skills/hum/**)",
+      "Read(//Users/justinyek/Library/CloudStorage/GoogleDrive-justinyek@gmail.com/My Drive/Project Claw/hum/**)",
+      "WebSearch",
+      "Read(//Users/justinyek/Sites/blog/.claude/skills/crawl/**)",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/justinyek/Library/CloudStorage/GoogleDrive-justinyek@gmail.com/My Drive/Project Claw/hum/ideas",
+      "/Users/justinyek/Library/CloudStorage/GoogleDrive-justinyek@gmail.com/My Drive/Project Claw/hum/content",
+      "/Users/justinyek/Library/CloudStorage/GoogleDrive-justinyek@gmail.com/My Drive/Project Claw/hum/learn",
+      "/Users/justinyek/.claude",
+      "/Users/justinyek/.claude/skills/hum/scripts/feed",
+      "/Users/justinyek/.claude/skills/hum"
+    ]
+  }
+}

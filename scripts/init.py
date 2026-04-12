@@ -32,9 +32,36 @@ FOLDERS = [
     "content-samples",
     "knowledge",
     "ideas",
+    "learn",
 ]
 
 TEMPLATES = {
+    "knowledge/index.md": """\
+# Knowledge Sources
+
+Long-form sources crawled by `/hum crawl` and `/hum refresh-feed`.
+Each table row defines a source with a Key (used as folder name), Handler, and Feed URL.
+
+Supported handlers: `rss`, `sitemap`, `youtube`, `podcast`
+
+## Blogs & Newsletters
+
+| Key | Handler | Feed URL |
+|-----|---------|----------|
+<!-- | example-blog | rss | https://example.com/feed.xml | -->
+
+## YouTube Channels (full transcripts)
+
+| Key | Handler | Feed URL |
+|-----|---------|----------|
+<!-- | example-channel | youtube | https://www.youtube.com/@example | -->
+
+## Podcasts
+
+| Key | Handler | Feed URL |
+|-----|---------|----------|
+<!-- | example-pod | podcast | https://feeds.example.com/podcast.xml | -->
+""",
     "VOICE.md": """\
 # Voice
 

@@ -1,48 +1,67 @@
 # Hum Daily Loop
 
-Run every morning. Follow each step in order. If a step fails, note it and continue.
+Run every morning via `python3 scripts/loop.py` or `/hum loop`. Follow each step in order. If a step fails, note it and continue.
 
-Python: `/opt/homebrew/bin/python3`
+Python: `python3` (system default)
 Scripts: `skills/hum/scripts`
 
-## Step 1 — Scrape X feed (browser)
+## Step 1 — Feed Digest
 
-Run `scripts/feed/refresh.py`. It prints JSON browser automation instructions. **Follow them:**
+Runs the full feed pipeline: fetch → rank → format → send.
 
-1. Open https://x.com/home in browser (profile='user')
-2. Scroll 5 times, 2s pause between scrolls
-3. For each visible tweet: extract author, text, likes, URL
-4. Classify posts by the topic keywords in the JSON output
-5. Save results to the `output` path shown in the JSON
+All sources fetch directly via API — no browser automation:
+- **X home feed**: Bird API (`filter:follows since:<last_crawled>`)
+- **X profiles**: Bird API (`from:<handle> since:<last_crawled>`)
+- **Hacker News**: Algolia public API
+- **YouTube**: yt-dlp (for `sources.json` YouTube channels)
+- **Knowledge sources**: RSS, sitemaps, YouTube transcripts, and podcasts from `knowledge/index.md` — saves full articles to `knowledge/<source>/` and generates feed items
 
-## Step 2 — Fetch YouTube (parallel with step 1)
+All items merge into `feeds.json`, then rank and format a digest sent via Telegram.
 
-Run `scripts/feed/source/youtube.py --days 7`. This fetches directly via yt-dlp — no browser needed.
+```bash
+python3 scripts/loop.py --step digest
+```
 
-## Step 3 — Rank
+Or run the full pipeline manually:
+```bash
+python3 scripts/feed/refresh.py --type all
+python3 scripts/feed/ranker.py --input <feeds_file> --output <ranked_file>
+python3 scripts/feed/digest.py --input <feeds_file> --youtube-input <youtube_file> --max-posts 12
+```
 
-Run `scripts/feed/ranker.py`. Depends on step 1 completing (needs feeds.json).
+Requires `AUTH_TOKEN` and `CT0` session cookies in `~/.hum/credentials/x.json` (or `HUM_X_AUTH_TOKEN` / `HUM_X_CT0` env vars) for X sources. If missing, X fetch is skipped and the rest still runs.
 
-## Step 4 — Format and send digest
+## Step 2 — Engage (parallel with digest)
 
-Run `scripts/feed/digest.py`. Deliver the output to the configured digest target:
+Suggest accounts to follow and draft replies for approval. Opens X and LinkedIn in browser for comment/reply checking.
 
-1. Run `python3 -c "from skills.hum.scripts.config import load_config; c=load_config(); print(c['digest_target'] or '')"` to read the target.
-2. If a target is returned, send there. If empty, log a warning and skip delivery.
+```bash
+python3 scripts/loop.py --step engage
+```
 
-## Step 5 — Engage (parallel with steps 3-4)
-
-1. Open X and LinkedIn in browser
-2. Check recent posts for unanswered comments
-3. Draft reply suggestions for user approval
-4. Suggest 3-5 new accounts to follow based on feed sources
-
-## Step 6 — Brainstorm
+## Step 3 — Brainstorm
 
 Run `scripts/create/brainstorm.py --max 8`. Present top ideas and ask:
 - "Any topics to add to the pipeline?"
 - "Want to work on any posts today?"
 
-## Step 7 — Learn (Sundays only)
+```bash
+python3 scripts/loop.py --step brainstorm
+```
+
+## Step 4 — Learn (Sundays only)
 
 Run `/hum learn` as defined in COMMANDS.md. Analyze feed trends, research platform algorithms, update context files.
+
+```bash
+python3 scripts/loop.py --step learn
+```
+
+## Full loop
+
+```bash
+python3 scripts/loop.py                     # full daily loop
+python3 scripts/loop.py --dry-run           # format output but don't send
+python3 scripts/loop.py --max-posts 15      # override digest size
+python3 scripts/loop.py --skip-youtube      # skip YouTube fetch
+```

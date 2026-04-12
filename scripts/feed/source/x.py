@@ -85,7 +85,7 @@ def fetch_home_feed_via_bird(
     # that HN items carry. The home feed is the broadest intake — topic
     # tagging matters most here.
     for item in items:
-        item["topics"] = classify(item.get("text", ""))
+        item["topics"] = classify(item.get("content", ""))
     return items
 
 
