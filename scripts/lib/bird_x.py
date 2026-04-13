@@ -22,6 +22,7 @@ from typing import Any
 _BIRD_SEARCH_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-search.mjs"
 _BIRD_DETAIL_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-tweet-detail.mjs"
 _BIRD_FOLLOW_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-follow.mjs"
+_BIRD_FOLLOWING_MJS = Path(__file__).parent / "vendor" / "bird-search" / "bird-following.mjs"
 
 _credentials: dict[str, str] = {}
 
@@ -126,6 +127,52 @@ def follow_accounts(handles: list[str], timeout: int = 30) -> list[dict]:
         return [{"handle": h, "success": False, "error": f"invalid JSON: {e}"} for h in handles]
     except Exception as e:
         return [{"handle": h, "success": False, "error": str(e)} for h in handles]
+
+
+def fetch_following(handle: str, timeout: int = 120) -> set[str]:
+    """Fetch the set of screen names a given X handle follows.
+
+    Paginates X's Following GraphQL via vendored bird-following.mjs, which
+    uses the same AUTH_TOKEN/CT0 credentials as the rest of bird-search.
+
+    Returns an empty set on failure (missing node/creds, network error,
+    resolve error). Caller should treat empty as "filter unavailable".
+    """
+    if not _BIRD_FOLLOWING_MJS.exists() or not shutil.which("node"):
+        return set()
+    if not _has_credentials():
+        return set()
+
+    cmd = ["node", str(_BIRD_FOLLOWING_MJS), handle.lstrip("@")]
+    preexec = os.setsid if hasattr(os, "setsid") else None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=preexec,
+            env=_subprocess_env(),
+        )
+        try:
+            stdout, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+            proc.wait(timeout=5)
+            return set()
+
+        output = (stdout or "").strip()
+        if not output:
+            return set()
+        data = json.loads(output)
+        if not isinstance(data, dict) or "handles" not in data:
+            return set()
+        return {str(h).lower() for h in data.get("handles", []) if h}
+    except (json.JSONDecodeError, Exception):
+        return set()
 
 
 def fetch_article(tweet_id: str, timeout: int = 20) -> dict | None:

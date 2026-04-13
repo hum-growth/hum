@@ -161,6 +161,34 @@ def load_topics(data_dir: Path | None = None) -> dict[str, list[str]]:
     return topics
 
 
+def load_channel_handle(platform: str, data_dir: Path | None = None) -> str | None:
+    """Return the configured handle for a platform from CHANNELS.md.
+
+    Parses `## X (@handle)` / `## LinkedIn (@handle)` headers. Matching is
+    case-insensitive on the platform name. Returns the handle without the
+    leading `@`, or None if not found.
+    """
+    if data_dir is None:
+        data_dir = load_config()["data_dir"]
+
+    channels_md = data_dir / "CHANNELS.md"
+    if not channels_md.exists():
+        return None
+
+    platform_lower = platform.strip().lower()
+    try:
+        with channels_md.open(encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"^##\s+([^\s(]+)\s*\(@([^)\s]+)\)", line)
+                if not m:
+                    continue
+                if m.group(1).strip().lower() == platform_lower:
+                    return m.group(2).strip()
+    except OSError:
+        return None
+    return None
+
+
 def load_x_credentials() -> dict[str, str | None]:
     """Load X/Twitter session credentials for Bird-based scraping.
 

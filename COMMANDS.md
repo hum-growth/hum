@@ -2,6 +2,10 @@
 
 Commands for a user's content writing workflow. These are handled by the main session.
 
+## Prerequisites
+
+Run `bash setup.sh` once to create the venv and install dependencies. Before running any `python3` command below, activate the venv with `source venv/bin/activate` (or substitute your own Python path if you manage dependencies differently). All examples assume `python3` resolves to the venv and the cwd is the skill folder.
+
 ## Data Directory
 
 All data lives in `<data_dir>` (set via `HUM_DATA_DIR` env var, defaults to `~/Documents/hum`). In the command docs below, `<data_dir>` means this directory.
@@ -14,7 +18,7 @@ All data lives in `<data_dir>` (set via `HUM_DATA_DIR` env var, defaults to `~/D
 Sets up the hum data directory with template files and required folders. Safe to run multiple times — skips anything that already exists.
 
 ```bash
-python3 skills/hum/scripts/init.py
+python3 scripts/init.py
 ```
 
 **Creates:**
@@ -26,7 +30,8 @@ python3 skills/hum/scripts/init.py
 
 **Folders:**
 - `feed/`, `feed/raw/`, `feed/assets/`
-- `content/`, `content-samples/`, `knowledge/`, `ideas/`, `learn/`
+- `content/`, `content/drafts/`, `content/published/`, `content/images/`
+- `content-samples/`, `knowledge/`, `ideas/`, `learn/`
 
 After running, edit each file to set up your profile. The content pillars in `CONTENT.md` drive feed classification and brainstorming.
 
@@ -53,7 +58,7 @@ Fetches X home feed, X profiles, Hacker News, YouTube, and knowledge sources (RS
 Runs the full refresh pipeline in a single command:
 
 ```bash
-python3 skills/hum/scripts/feed/refresh.py --type all
+python3 scripts/feed/refresh.py --type all
 ```
 
 This fetches:
@@ -71,7 +76,7 @@ All items are merged into `feeds.json` with `source: "x" | "hn" | "knowledge"`, 
 
 You can also crawl knowledge sources independently:
 ```bash
-python3 skills/hum/scripts/feed/refresh.py --type knowledge
+python3 scripts/feed/refresh.py --type knowledge
 ```
 
 ### Step 2 — Pull YouTube creator updates (optional, for sources.json YouTube only)
@@ -79,7 +84,7 @@ python3 skills/hum/scripts/feed/refresh.py --type knowledge
 Only needed for YouTube channels defined in `sources.json` (short digest summaries via yt-dlp). YouTube channels in `knowledge/index.md` are crawled as full transcripts in Step 1.
 
 ```bash
-python3 skills/hum/scripts/feed/source/youtube.py \
+python3 scripts/feed/source/youtube.py \
   --file <data_dir>/feed/sources.json \
   --days 7 \
   --output <data_dir>/feed/raw/youtube_feed.json
@@ -88,7 +93,7 @@ python3 skills/hum/scripts/feed/source/youtube.py \
 ### Step 3 — Rank and aggregate
 
 ```bash
-python3 skills/hum/scripts/feed/ranker.py \
+python3 scripts/feed/ranker.py \
   --input <data_dir>/feed/feeds.json \
   --output <data_dir>/feed/raw/feed_ranked.json
 ```
@@ -98,7 +103,7 @@ Merge all source outputs (X, YouTube, HN, knowledge) into `feed/feeds.json` — 
 ### Step 4 — Format & send digest
 
 ```bash
-python3 skills/hum/scripts/feed/digest.py \
+python3 scripts/feed/digest.py \
   --input <data_dir>/feed/feeds.json \
   --youtube-input <data_dir>/feed/raw/youtube_feed.json \
   --max-posts 12
@@ -110,10 +115,6 @@ message(action="send", channel="telegram", target="<user>", message="<digest>")
 ```
 
 Target: **up to 4 posts per category** (AI / Startups / Crypto). Skip any section with 0 matches.
-
-### Step 5 — Archive
-
-Append today's digest to `<data_dir>/feed/feeds.json` for historical reference. Insert new entries at the top, before previous entries.
 
 **Telegram output format:**
 ```
@@ -145,7 +146,7 @@ YouTube items are prefixed with ▶:
    [url]
 ```
 
-Posts are grouped by content pillar topic (up to 3 per topic). Items not matching any topic appear in the General section. HN stories and knowledge items are mixed into topic sections based on their classified topics.
+Posts are grouped by content pillar topic (up to 3 per topic). HN stories are mixed into topic sections based on their classified topics. Knowledge items (and anything unclassified) fall into the General section.
 
 ---
 
@@ -173,12 +174,9 @@ python3 -m feed.source.knowledge <source_key> --max 5
 python3 -m feed.source.knowledge <source_key> --recrawl
 ```
 
-Run from `skills/hum/scripts/` directory. Sources are defined as markdown tables in `knowledge/index.md` with columns: Key, Handler (rss/sitemap/youtube/podcast), Feed URL.
+Run from `scripts/` directory. Sources are defined as markdown tables in `knowledge/index.md` with columns: Key, Handler (rss/sitemap/youtube/podcast), Feed URL.
 
-**Requirements:**
-```bash
-pip3 install trafilatura feedparser python-slugify requests lxml_html_clean youtube-transcript-api
-```
+**Requirements:** Requires the venv — run `bash setup.sh` from the skill root if you haven't yet.
 
 ---
 
@@ -189,19 +187,19 @@ Manage feed sources — list, add, or remove X accounts, YouTube creators, and w
 
 ```bash
 # List all sources
-python3 skills/hum/scripts/feed/sources.py list
+python3 scripts/feed/sources.py list
 
 # Add an X account
-python3 skills/hum/scripts/feed/sources.py add x <handle> [category]
+python3 scripts/feed/sources.py add x <handle> [category]
 
 # Add a YouTube creator
-python3 skills/hum/scripts/feed/sources.py add youtube <url> [name]
+python3 scripts/feed/sources.py add youtube <url> [name]
 
 # Add a website
-python3 skills/hum/scripts/feed/sources.py add website <name> <url>
+python3 scripts/feed/sources.py add website <name> <url>
 
 # Remove a source
-python3 skills/hum/scripts/feed/sources.py remove <handle_or_name>
+python3 scripts/feed/sources.py remove <handle_or_name>
 ```
 
 Sources are stored in `<data_dir>/feed/sources.json`.
@@ -237,7 +235,7 @@ To change, set environment variables or edit `openclaw.json`:
 }
 ```
 
-Or run `python3 skills/hum/scripts/config.py` to verify resolved paths.
+Or run `python3 scripts/config.py` to verify resolved paths.
 
 ---
 
@@ -607,12 +605,12 @@ Publishes an approved draft to X or LinkedIn via platform connectors (API-based)
 
 **Steps:**
 1. Read the draft from `<data_dir>/content/drafts/`
-2. Read connector docstrings in `skills/hum/scripts/act/connectors/` for credential shape and connector details
+2. Read connector docstrings in `scripts/act/connectors/` for credential shape and connector details
 3. Show the exact final text and ask: "Ready to publish to [platform]?"
 4. Run a preview first:
-   `python3 skills/hum/scripts/act/publish.py --draft "[draft path]"`
+   `python3 scripts/act/publish.py --draft "[draft path]"`
 5. On confirmation, publish using:
-   `python3 skills/hum/scripts/act/publish.py --draft "[draft path]" --account "[account]" --publish --update-draft`
+   `python3 scripts/act/publish.py --draft "[draft path]" --account "[account]" --publish --update-draft`
 6. If a LinkedIn image or X first-post image exists, include:
    `--image "/absolute/path/to/image.png"`
 7. Confirm success from the returned URL / ID
@@ -676,7 +674,7 @@ Once the article URL is known:
 1. Append the URL to the intro feed post draft
 2. Publish via:
 ```bash
-cd skills/hum/scripts && python3 -m act.connectors.linkedin \
+cd scripts && python3 -m act.connectors.linkedin \
   --account <account> \
   --text "<intro post text>\n\n<article URL>"
 ```
@@ -903,10 +901,10 @@ Collects real writing samples from the user's social media profiles into `<data_
 Log upvote/downvote on digest items and update feed preferences.
 
 ```bash
-python3 skills/hum/scripts/feed/feedback.py log --item 3 --vote up
-python3 skills/hum/scripts/feed/feedback.py log --item 1 --vote down
-python3 skills/hum/scripts/feed/feedback.py show     # show current preferences
-python3 skills/hum/scripts/feed/feedback.py history   # show recent votes
+python3 scripts/feed/feedback.py log --item 3 --vote up
+python3 scripts/feed/feedback.py log --item 1 --vote down
+python3 scripts/feed/feedback.py show     # show current preferences
+python3 scripts/feed/feedback.py history   # show recent votes
 ```
 
 Preferences are stored in `feed/assets/preferences.json` and used by the ranker to score future feed items.

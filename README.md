@@ -38,6 +38,10 @@ gemini extensions install https://github.com/hum-growth/hum
 
 ## Setup
 
+### 0. Install Python dependencies
+
+Run `bash setup.sh` from the repo root to create a venv at `venv/` and install everything from `requirements.txt`. Activate it with `source venv/bin/activate` before running any `python3 scripts/...` command, or substitute your own Python path if you manage dependencies differently. All examples below assume `python3` resolves to the venv and the cwd is the skill folder.
+
 ### 1. Configure data directory
 
 Set the data directory via `openclaw.json` or environment variable (defaults to `~/Documents/hum` if neither is set):

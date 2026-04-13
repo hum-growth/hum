@@ -2,8 +2,7 @@
 
 Run every morning via `python3 scripts/loop.py` or `/hum loop`. Follow each step in order. If a step fails, note it and continue.
 
-Python: `python3` (system default)
-Scripts: `skills/hum/scripts`
+Prerequisites: run `bash setup.sh` once, then `source venv/bin/activate` before running anything below (or substitute your own Python path). All examples assume `python3` resolves to the venv and the cwd is the skill folder.
 
 ## Step 1 — Feed Digest
 
@@ -14,15 +13,16 @@ All sources fetch directly via API — no browser automation:
 - **X profiles**: Bird API (`from:<handle> since:<last_crawled>`)
 - **Hacker News**: Algolia public API
 - **YouTube**: yt-dlp (for `sources.json` YouTube channels)
-- **Knowledge sources**: RSS, sitemaps, YouTube transcripts, and podcasts from `knowledge/index.md` — saves full articles to `knowledge/<source>/` and generates feed items
 
 All items merge into `feeds.json`, then rank and format a digest sent via Telegram.
+
+Knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) are **not** crawled by the loop digest step — use `/hum refresh-feed` or `/hum crawl` for that.
 
 ```bash
 python3 scripts/loop.py --step digest
 ```
 
-Or run the full pipeline manually:
+Or run the full pipeline manually (this one *does* include knowledge via `refresh.py --type all`):
 ```bash
 python3 scripts/feed/refresh.py --type all
 python3 scripts/feed/ranker.py --input <feeds_file> --output <ranked_file>
@@ -33,7 +33,7 @@ Requires `AUTH_TOKEN` and `CT0` session cookies in `~/.hum/credentials/x.json` (
 
 ## Step 2 — Engage (parallel with digest)
 
-Suggest accounts to follow and draft replies for approval. Opens X and LinkedIn in browser for comment/reply checking.
+Analyzes recent X posts in `feeds.json` and surfaces accounts the user isn't already following as follow suggestions. Inbound comment/reply review is handled by `/hum engage` separately, not the loop step.
 
 ```bash
 python3 scripts/loop.py --step engage

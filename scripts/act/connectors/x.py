@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
 """
-X (Twitter) connector — API-only.
+X (Twitter) connector — cookie GraphQL with browser fallback.
 
-Uses X API v2 for posting. Browser-based actions (when API is unavailable)
-should be handled by the agent via the browser tool.
+Posts via the web client's internal CreateTweet mutation using auth_token +
+ct0 cookies. The official X API v2 path was removed — our account tier
+never had write access. When cookie auth fails (ct0 rotation, endpoint
+drift, rate limit), post()/post_thread() return ``needs_browser: True``
+with compose instructions for the calling agent to drive via CDP.
 
-Credentials: credentials/x.json or X_USER_ACCESS_TOKEN env var.
-Format:
-    {"accounts": {"account-key": {"username": "@handle", "user_access_token": "..."}}}
+ct0 rotates every few hours — refresh from browser (F12 → Application →
+Cookies → x.com) when posts start returning 403.
+
+Credentials: credentials/x.json.
+Formats:
+    {"auth_token": "...", "ct0": "..."}                         # single account
+    {"accounts": {"<key>": {"auth_token": "...", "ct0": "..."}}} # multi-account
 
 Usage:
   python3 -m act.connectors.x --account <account> --text "hello world"
-  python3 -m act.connectors.x --account <account> --text "hello" --image /path/to/image.png
   python3 -m act.connectors.x --account <account> --segments '["tweet 1", "tweet 2"]'
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import mimetypes
 import os
 import stat
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +38,52 @@ CREDENTIALS_DIR = Path(os.environ.get("CREDENTIALS_DIR", Path.home() / ".hum" / 
 X_CREDS_PATH = CREDENTIALS_DIR / "x.json"
 
 PLATFORM = "x"
+
+# Internal CreateTweet GraphQL — sourced from fa0311/TwitterInternalAPIDocument
+# and trevorhobenshield/twitter-api-client. QueryId and features drift when X
+# ships client updates; refresh from those repos if posts start returning 400.
+_X_GQL_BEARER = (
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
+    "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+)
+_X_CREATE_TWEET_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
+_X_CREATE_TWEET_URL = f"https://x.com/i/api/graphql/{_X_CREATE_TWEET_QUERY_ID}/CreateTweet"
+_X_CREATE_TWEET_FEATURES: dict[str, bool] = {
+    "premium_content_api_read_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": False,
+    "responsive_web_jetfuel_frame": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "responsive_web_grok_annotations_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "content_disclosure_indicator_enabled": True,
+    "content_disclosure_ai_generated_indicator_enabled": True,
+    "responsive_web_grok_show_grok_translated_post": True,
+    "responsive_web_grok_analysis_button_from_backend": True,
+    "post_ctas_fetch_enabled": False,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": False,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_profile_redirect_enabled": False,
+    "rweb_tipjar_consumption_enabled": False,
+    "verified_phone_label_enabled": False,
+    "articles_preview_enabled": True,
+    "responsive_web_grok_community_note_auto_translation_is_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_imagine_annotation_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+}
 
 
 class XConnectorError(RuntimeError):
@@ -48,7 +99,12 @@ ConnectorError = XConnectorError
 
 
 def load_credentials(account: str | None) -> dict[str, Any]:
-    """Load X API credentials for the given account."""
+    """Load X cookie credentials for the given account.
+
+    Returns a dict with ``auth_token``, ``ct0``, and ``username`` when
+    available, or ``{}`` when the file is missing or no usable cookies
+    are found.
+    """
     if not X_CREDS_PATH.exists():
         return {}
     cred_path = X_CREDS_PATH
@@ -66,143 +122,206 @@ def load_credentials(account: str | None) -> dict[str, Any]:
             return {}
         creds = creds["accounts"][account]
 
-    token = (
-        os.environ.get("X_USER_ACCESS_TOKEN")
-        or os.environ.get("TWITTER_USER_ACCESS_TOKEN")
-        or creds.get("user_access_token")
-    )
-    if not token:
+    auth_token = creds.get("auth_token")
+    ct0 = creds.get("ct0")
+    if not (auth_token and ct0):
         return {}
 
     return {
-        "user_access_token": token,
         "username": creds.get("username", root.get("username", account or "unknown")),
+        "auth_token": auth_token,
+        "ct0": ct0,
     }
 
 
-def _api_available(account: str | None) -> bool:
-    """Check if X API credentials are available."""
+def _cookie_available(account: str | None) -> bool:
+    """Check if cookie-based GraphQL credentials are available."""
     try:
         creds = load_credentials(account)
-        return bool(creds.get("user_access_token"))
+        return bool(creds.get("auth_token") and creds.get("ct0"))
     except ConnectorError:
         return False
 
 
-def _x_headers(token: str) -> dict[str, str]:
+# ── Cookie GraphQL posting ──────────────────────────────────────────────────
+
+
+def _cookie_headers(ct0: str, auth_token: str) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {_X_GQL_BEARER}",
         "Content-Type": "application/json",
+        "Cookie": f"auth_token={auth_token}; ct0={ct0}",
+        "x-csrf-token": ct0,
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "en",
     }
 
 
-# ── API posting ─────────────────────────────────────────────────────────────
-
-
-def _upload_media_api(token: str, image_path: Path) -> str:
-    """Upload an image to X via API. Returns media_id."""
-    content_type, _ = mimetypes.guess_type(image_path.name)
-    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise ConnectorError("X API media upload supports jpg, png, or webp.")
-
-    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    payload = {
-        "media": encoded,
-        "media_category": "tweet_image",
-        "media_type": content_type,
-        "shared": False,
+def _create_tweet_variables(text: str, reply_to: str | None) -> dict[str, Any]:
+    variables: dict[str, Any] = {
+        "tweet_text": text,
+        "dark_request": False,
+        "media": {"media_entities": [], "possibly_sensitive": False},
+        "semantic_annotation_ids": [],
+        "disallowed_reply_hashtags": [],
     }
-    _, data, _ = http_request(
-        "POST",
-        "https://api.x.com/2/media/upload",
-        headers=_x_headers(token),
-        payload=payload,
-        exc_factory=ConnectorError,
-    )
-    media_id = data.get("data", {}).get("id")
-    if not media_id:
-        raise ConnectorError(f"X media upload did not return an id: {data}")
-    return media_id
+    if reply_to:
+        variables["reply"] = {
+            "in_reply_to_tweet_id": reply_to,
+            "exclude_reply_user_ids": [],
+        }
+        variables["batch_compose"] = "BatchSubsequent"
+    return variables
 
 
-def _post_api(
+def _create_tweet_cookie(
     text: str,
-    account: str,
-    media_path: Path | None = None,
+    ct0: str,
+    auth_token: str,
+    reply_to: str | None = None,
 ) -> dict[str, Any]:
-    """Post a single tweet via X API v2."""
-    creds = load_credentials(account)
-    token = creds["user_access_token"]
-
-    payload: dict[str, Any] = {"text": text}
-    if media_path:
-        media_id = _upload_media_api(token, media_path)
-        payload["media"] = {"media_ids": [media_id]}
-
+    """POST to CreateTweet GraphQL and return the parsed tweet result."""
+    payload = {
+        "variables": _create_tweet_variables(text, reply_to),
+        "features": _X_CREATE_TWEET_FEATURES,
+        "queryId": _X_CREATE_TWEET_QUERY_ID,
+    }
     _, data, _ = http_request(
         "POST",
-        "https://api.x.com/2/tweets",
-        headers=_x_headers(token),
+        _X_CREATE_TWEET_URL,
+        headers=_cookie_headers(ct0, auth_token),
         payload=payload,
         exc_factory=ConnectorError,
     )
-    tweet_id = data.get("data", {}).get("id")
-    if not tweet_id:
-        raise ConnectorError(f"X post create failed: {data}")
+    if not isinstance(data, dict):
+        raise ConnectorError("CreateTweet returned non-JSON response")
+    errors = data.get("errors")
+    if errors:
+        raise ConnectorError(f"CreateTweet error: {errors}")
+    result = (
+        data.get("data", {})
+        .get("create_tweet", {})
+        .get("tweet_results", {})
+        .get("result", {})
+    )
+    if not result.get("rest_id"):
+        raise ConnectorError(f"CreateTweet missing rest_id: {data}")
+    return result
 
+
+def _extract_screen_name(tweet_result: dict[str, Any], fallback: str) -> str:
+    """Pull screen_name from a CreateTweet result, with a safe fallback.
+
+    X has moved this field between ``core`` and ``legacy`` on the user object
+    in different client versions, so try both.
+    """
+    try:
+        user_result = tweet_result["core"]["user_results"]["result"]
+    except (KeyError, TypeError):
+        return fallback
+    for sub in ("core", "legacy"):
+        name = (user_result.get(sub) or {}).get("screen_name")
+        if name:
+            return name
+    return fallback
+
+
+def _post_cookie(text: str, account: str) -> dict[str, Any]:
+    creds = load_credentials(account)
+    result = _create_tweet_cookie(text, creds["ct0"], creds["auth_token"])
+    tweet_id = result["rest_id"]
+    screen_name = _extract_screen_name(result, creds["username"].lstrip("@"))
     return {
-        "method": "api",
+        "method": "cookie",
         "platform": "x",
-        "account": creds["username"],
+        "account": screen_name,
         "tweet_id": tweet_id,
-        "url": f"https://x.com/{creds['username']}/status/{tweet_id}",
+        "url": f"https://x.com/{screen_name}/status/{tweet_id}",
     }
 
 
-def _post_thread_api(
-    segments: list[str],
-    account: str,
-    media_path: Path | None = None,
-) -> dict[str, Any]:
-    """Post a thread via X API v2 (reply chain)."""
+def _post_thread_cookie(segments: list[str], account: str) -> dict[str, Any]:
     creds = load_credentials(account)
-    token = creds["user_access_token"]
-
     for idx, seg in enumerate(segments, 1):
         if len(seg) > 280:
             raise ConnectorError(f"Segment {idx} exceeds 280 chars ({len(seg)}).")
 
-    media_id = _upload_media_api(token, media_path) if media_path else None
-    previous_id = None
+    previous_id: str | None = None
     posted_ids: list[str] = []
-
-    for idx, seg in enumerate(segments):
-        payload: dict[str, Any] = {"text": seg}
-        if idx == 0 and media_id:
-            payload["media"] = {"media_ids": [media_id]}
-        if previous_id:
-            payload["reply"] = {"in_reply_to_tweet_id": previous_id}
-
-        _, data, _ = http_request(
-            "POST",
-            "https://api.x.com/2/tweets",
-            headers=_x_headers(token),
-            payload=payload,
-            exc_factory=ConnectorError,
+    screen_name = creds["username"].lstrip("@")
+    for seg in segments:
+        result = _create_tweet_cookie(
+            seg, creds["ct0"], creds["auth_token"], reply_to=previous_id
         )
-        tweet_id = data.get("data", {}).get("id")
-        if not tweet_id:
-            raise ConnectorError(f"X post create failed at segment {idx + 1}: {data}")
-        previous_id = tweet_id
-        posted_ids.append(tweet_id)
+        previous_id = result["rest_id"]
+        posted_ids.append(previous_id)
+        screen_name = _extract_screen_name(result, screen_name)
 
     first_id = posted_ids[0]
     return {
-        "method": "api",
+        "method": "cookie",
         "platform": "x",
-        "account": creds["username"],
+        "account": screen_name,
         "posted_ids": posted_ids,
-        "url": f"https://x.com/{creds['username']}/status/{first_id}",
+        "url": f"https://x.com/{screen_name}/status/{first_id}",
+    }
+
+
+# ── Browser fallback ────────────────────────────────────────────────────────
+
+
+def _browser_post_fallback(
+    segments: list[str],
+    account: str,
+    media_path: Path | None,
+    reason: str,
+) -> dict[str, Any]:
+    """Return a ``needs_browser: True`` dict with compose instructions.
+
+    The calling agent (publish.py invoker) sees this payload and drives the
+    compose flow via its browser tool / CDP relay. ``reason`` is included so
+    the caller can surface why cookie auth was skipped or failed.
+    """
+    is_thread = len(segments) > 1
+    action = "post_x_thread" if is_thread else "post_x_tweet"
+    steps: list[str] = [
+        "Navigate to https://x.com/home",
+        "Wait for the home timeline to render (2-3 seconds)",
+        "Click the main compose box (\"What's happening?\")",
+        "Type the first segment verbatim — do not edit, shorten, or reformat",
+    ]
+    if media_path:
+        steps.append(f"Attach the image at {media_path} via the media button")
+    if is_thread:
+        steps.extend([
+            "Click the '+' (Add post) button below the compose box",
+            "Type the next segment verbatim in the new entry",
+            "Repeat '+' and type for each remaining segment",
+        ])
+    steps.extend([
+        "Click the 'Post' (or 'Post all') button to publish",
+        "Wait for the compose dialog to dismiss",
+        "Capture the URL of the newly published post (click it from the timeline if needed)",
+    ])
+    return {
+        "needs_browser": True,
+        "platform": "x",
+        "action": action,
+        "account": account,
+        "segments": segments,
+        "image": str(media_path) if media_path else None,
+        "reason": reason,
+        "compose_url": "https://x.com/home",
+        "instructions": {
+            "action": action,
+            "url": "https://x.com/home",
+            "steps": steps,
+            "output_schema": {
+                "posted_ids": ["string (tweet id per segment)"],
+                "url": "string (URL of the first posted tweet)",
+            },
+        },
     }
 
 
@@ -214,18 +333,32 @@ def post(
     account: str,
     media_path: str | None = None,
 ) -> dict[str, Any]:
-    """Post a single tweet via X API.
+    """Post a single tweet via cookie GraphQL, with browser fallback.
 
-    Returns dict with: method, platform, account, url, tweet_id.
-    Raises ConnectorError if API credentials are missing or the request fails.
+    Returns either ``{method, platform, account, url, tweet_id}`` on success
+    or ``{needs_browser: True, ...}`` when cookies are missing/stale or the
+    request fails — the calling agent handles the browser path.
     """
     resolved_media = Path(media_path).resolve() if media_path else None
-    if not _api_available(account):
-        raise ConnectorError(
-            "X API credentials not available. "
-            "Add credentials to credentials/x.json or set X_USER_ACCESS_TOKEN."
+    segments = [text]
+
+    if resolved_media:
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason="Media upload not supported via cookie GraphQL",
         )
-    return _post_api(text, account, resolved_media)
+    if not _cookie_available(account):
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason="X cookie credentials (auth_token + ct0) not found in credentials/x.json",
+        )
+    try:
+        return _post_cookie(text, account)
+    except ConnectorError as err:
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason=f"Cookie post failed: {err}",
+        )
 
 
 def post_thread(
@@ -233,18 +366,31 @@ def post_thread(
     account: str,
     media_path: str | None = None,
 ) -> dict[str, Any]:
-    """Post a thread via X API (reply chain).
+    """Post a thread via cookie GraphQL, with browser fallback.
 
-    Returns dict with: method, platform, account, url, posted_ids.
-    Raises ConnectorError if API credentials are missing or the request fails.
+    Returns either ``{method, platform, account, url, posted_ids}`` on success
+    or ``{needs_browser: True, ...}`` when cookies are missing/stale or the
+    request fails — the calling agent handles the browser path.
     """
     resolved_media = Path(media_path).resolve() if media_path else None
-    if not _api_available(account):
-        raise ConnectorError(
-            "X API credentials not available. "
-            "Add credentials to credentials/x.json or set X_USER_ACCESS_TOKEN."
+
+    if resolved_media:
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason="Media upload not supported via cookie GraphQL",
         )
-    return _post_thread_api(segments, account, resolved_media)
+    if not _cookie_available(account):
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason="X cookie credentials (auth_token + ct0) not found in credentials/x.json",
+        )
+    try:
+        return _post_thread_cookie(segments, account)
+    except ConnectorError as err:
+        return _browser_post_fallback(
+            segments, account, resolved_media,
+            reason=f"Cookie thread post failed: {err}",
+        )
 
 
 # ── Stubs (not yet implemented) ─────────────────────────────────────────────
@@ -273,8 +419,8 @@ def get_stats(
 ) -> dict[str, Any]:
     """Get engagement stats for an X account or post.
 
-    X API v2 stats (public_metrics, impression_count) require Pro tier ($5k/mo).
-    Always falls back to browser-based scraping via the agent's browser session.
+    Always returns ``needs_browser: True`` — stats come from profile scraping
+    via the calling agent's browser session.
     """
     creds = load_credentials(account)
     username = creds.get("username", account) if creds else account

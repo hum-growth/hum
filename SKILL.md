@@ -3,10 +3,10 @@ name: hum
 description: Your AI content writer for X and LinkedIn. Hum handles the full content lifecycle: crawls your feed sources daily and sends a digest, brainstorms ideas grounded in real research across YouTube, X, Reddit, HN, and the web, then drafts posts in your voice using proven writing styles — from technical storytelling to contrarian takes. Every draft goes through a research → outline → approval loop before writing begins. Once approved, Hum publishes directly via API and manages engagement by drafting replies and suggesting accounts to follow.
 ---
 
-1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md, knowledge/index.md) and folders. After running init.py, also run `bash setup.sh` from the repo root to create the venv and install Python dependencies. All subsequent scripts require the venv (`venv/bin/python3`).
-3. **Refresh feed** — `/hum refresh-feed` fetches your X home feed (via Bird `filter:follows`), configured X profiles, Hacker News, YouTube, and knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) — all via direct APIs with no browser automation. Ranks items, sends a digest to Telegram, saves aggregated data to `feeds.json`
-4. **Crawl knowledge** — `/hum crawl` independently crawls knowledge sources defined in `knowledge/index.md`. Saves full articles to `knowledge/<source>/`. Also runs as part of refresh-feed.
-5. **Manage sources** — `/hum sources` adds, removes, and lists social/ephemeral feed sources in `sources.json`
+1. **Init** — `/hum init` sets up the data directory with template files (VOICE.md, CONTENT.md, AUDIENCE.md, CHANNELS.md, knowledge/index.md) and folders. After running init.py, also run `bash setup.sh` from the repo root to create the venv and install Python dependencies. All subsequent scripts require the venv — activate it with `source venv/bin/activate` before running any `python3 scripts/...` command.
+2. **Refresh feed** — `/hum refresh-feed` fetches your X home feed (via Bird `filter:follows`), configured X profiles, Hacker News, YouTube, and knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) — all via direct APIs with no browser automation. Ranks items, sends a digest to Telegram, saves aggregated data to `feeds.json`
+3. **Crawl knowledge** — `/hum crawl` independently crawls knowledge sources defined in `knowledge/index.md`. Saves full articles to `knowledge/<source>/`. Also runs as part of refresh-feed.
+4. **Manage sources** — `/hum sources` adds, removes, and lists social/ephemeral feed sources in `sources.json`
 5. **Brainstorm** — `/hum brainstorm` researches each content pillar across YouTube, X, Reddit, Hacker News, Polymarket, and web, then saves ideas to `ideas.json`
 6. **Learn** — `/hum learn` analyzes feed trends and platform algorithms, updates context files
 7. **Manage ideas** — `/hum ideas` shows the pipeline as numbered plain text. Format: `1. ID · Title · platform · status`. One idea per line. No markdown tables, no bullet points, no code blocks.
@@ -82,7 +82,7 @@ Each post type has a defined structure. The `/hum create` command requires a pla
 Actions live in `scripts/act/`, connectors in `scripts/act/connectors/` (one per channel):
 
 - **Connectors** (`act/connectors/`):
-  - `x.py` — X API v2 (requires `credentials/x.json` or `X_USER_ACCESS_TOKEN` env var)
+  - `x.py` — X cookie GraphQL (requires `auth_token` + `ct0` in `credentials/x.json`; falls back to browser compose on failure)
   - `linkedin.py` — LinkedIn REST API (requires `credentials/linkedin.json` or env vars)
   - All connectors follow a uniform interface — see `act/connectors/__init__.py` for the `load(platform)` dispatcher
 - **Actions** (`act/`):

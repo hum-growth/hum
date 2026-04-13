@@ -83,4 +83,4 @@ Two source lists serve different purposes:
 
 ## Development
 
-Source skill lives in `~/.openclaw/workspace/skills/hum/`. Run `bash sync.sh` to export changes to this repo.
+Symlink `~/.openclaw/workspace/skills/hum` → this repo so edits in either location show up in `git status` immediately — no sync step. See [README.md](../README.md#local-development) for the exact command.

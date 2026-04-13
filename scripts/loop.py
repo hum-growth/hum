@@ -30,7 +30,8 @@ from pathlib import Path
 _SCRIPTS_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from config import load_config
+from config import load_channel_handle, load_config, load_x_credentials
+from lib import bird_x
 
 _CFG = load_config()
 
@@ -51,13 +52,18 @@ def _save_step_output(step_name: str, text: str) -> None:
     print(f"[loop] Saved {step_name} output → {out_file}", file=sys.stderr)
 
 
-def run_step(label: str, cmd: list[str], *, allow_fail: bool = False) -> tuple[int, str]:
+def run_step(label: str, cmd: list[str], *, allow_fail: bool = False,
+              env_extra: dict | None = None) -> tuple[int, str]:
     """Run a subprocess step, printing status and returning captured stdout."""
+    import os
     print(f"\n{'─' * 50}")
     print(f"▶ {label}")
     print(f"  {' '.join(cmd)}")
     print(f"{'─' * 50}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    run_env = dict(os.environ)
+    if env_extra:
+        run_env.update(env_extra)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)
     if result.stdout:
         print(result.stdout, end="")
     if result.stderr:
@@ -187,28 +193,123 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
 # ── Step 2: Engage ─────────────────────────────────────────────────────────
 
 
-def run_engage():
-    """Suggest accounts to follow and draft replies for approval.
+_OUTBOUND_SUGGESTIONS = 5
 
-    Outputs structured suggestions for the agent to present to the user.
+
+def _load_following(handle: str | None) -> tuple[set[str], str]:
+    """Return (followed_handles, status) for the configured X user.
+
+    status is one of: "ok", "no-handle", "no-creds", "fetch-failed".
+    Empty set is returned in every non-ok status so the caller can decide
+    how to surface that to the user.
     """
-    lines = [
-        "",
-        "═" * 50,
-        "💬 ENGAGEMENT SUGGESTIONS",
-        "═" * 50,
-        "",
-        "Review your recent posts on X and LinkedIn for new comments/replies.",
-        "Check feed sources for high-value accounts to follow.",
-        "",
-        "Actions for the agent:",
-        "  1. Open X and LinkedIn in browser",
-        "  2. Check recent posts for unanswered comments",
-        "  3. Draft reply suggestions for user approval",
-        "  4. Suggest 3-5 new accounts to follow based on feed sources",
-        "",
-        "Present all suggestions and wait for user approval before acting.",
+    if not handle:
+        return set(), "no-handle"
+
+    creds = load_x_credentials()
+    if not creds.get("auth_token") or not creds.get("ct0"):
+        return set(), "no-creds"
+    bird_x.set_credentials(creds["auth_token"], creds["ct0"])
+
+    followed = bird_x.fetch_following(handle)
+    if not followed:
+        return set(), "fetch-failed"
+    return followed, "ok"
+
+
+def run_engage():
+    """Suggest X accounts to follow — filtered by who the user already follows.
+
+    Reads X posts from feeds_file, drops accounts already in sources.json or
+    already followed on X, and surfaces the most active remaining accounts.
+    """
+    feeds_file = Path(_CFG["feeds_file"])
+    sources_file = Path(_CFG["sources_file"])
+
+    tracked_handles: set[str] = set()
+    if sources_file.exists():
+        try:
+            sources_data = json.loads(sources_file.read_text())
+            for src in sources_data.get("x_profiles", []):
+                h = src.get("handle", "").lstrip("@").lower()
+                if h:
+                    tracked_handles.add(h)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    x_posts: list[dict] = []
+    if feeds_file.exists():
+        try:
+            posts = json.loads(feeds_file.read_text())
+            for p in posts:
+                if p.get("source") in ("x", "x_feed") and p.get("author"):
+                    x_posts.append(p)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    my_handle = load_channel_handle("x")
+    followed, filter_status = _load_following(my_handle)
+    if filter_status != "ok":
+        print(f"[loop] follower filter unavailable: {filter_status}", file=sys.stderr)
+    else:
+        print(f"[loop] @{my_handle} follows {len(followed)} accounts on X", file=sys.stderr)
+
+    # Always exclude the user themselves from suggestions.
+    self_exclude = {my_handle.lower()} if my_handle else set()
+
+    account_posts: dict[str, dict] = {}
+    for p in x_posts:
+        handle = p.get("author", "").lstrip("@").lower()
+        if not handle:
+            continue
+        if handle in tracked_handles or handle in followed or handle in self_exclude:
+            continue
+        text = p.get("content") or p.get("text") or p.get("title") or ""
+        entry = account_posts.setdefault(
+            handle, {"handle": handle, "count": 0, "sample": ""}
+        )
+        entry["count"] += 1
+        if not entry["sample"] and len(text) > 20:
+            entry["sample"] = text[:120]
+
+    top_accounts = sorted(account_posts.values(), key=lambda x: -x["count"])[
+        :_OUTBOUND_SUGGESTIONS
     ]
+
+    if top_accounts:
+        if filter_status == "ok":
+            header_note = f"Found {len(top_accounts)} accounts from today's feed that @{my_handle} doesn't follow yet."
+        elif filter_status == "no-handle":
+            header_note = f"Found {len(top_accounts)} candidate accounts — no X handle in CHANNELS.md, follower filter skipped."
+        else:
+            header_note = f"Found {len(top_accounts)} candidate accounts — follower filter unavailable ({filter_status}), double-check before following."
+
+        lines = [
+            "",
+            "═" * 50,
+            "💬 ACCOUNTS TO FOLLOW",
+            "═" * 50,
+            "",
+            header_note,
+            "",
+        ]
+        for acc in top_accounts:
+            lines.append(f"  • @{acc['handle']} — {acc['count']} posts")
+            if acc["sample"]:
+                lines.append(f"    {acc['sample'][:100]}")
+            lines.append(f"    https://x.com/{acc['handle']}")
+            lines.append("")
+        lines.append("Review your recent posts for replies before following any.")
+    else:
+        lines = [
+            "",
+            "═" * 50,
+            "💬 ENGAGEMENT",
+            "═" * 50,
+            "",
+            "No new accounts found in today's feed. Check for replies manually.",
+        ]
+
     text = "\n".join(lines)
     print(text)
     _save_step_output("engage", text)
