@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -30,10 +31,63 @@ from pathlib import Path
 _SCRIPTS_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
-from config import load_channel_handle, load_config, load_x_credentials
+from config import load_channel_config, load_channel_handle, load_config, load_topics, load_x_credentials
 from lib import bird_x
 
 _CFG = load_config()
+
+# Telegram message character limit
+_TG_LIMIT = 4000
+
+
+def _send_to_target(target_str: str, text: str, dry_run: bool = False) -> None:
+    """Send text to a delivery target.
+
+    target_str format: "channel:recipient" e.g. "telegram:-1003734033302"
+    Splits into chunks if text exceeds Telegram's 4000-char limit.
+    """
+    if not target_str or not text.strip():
+        return
+    parts = target_str.split(":", 1)
+    if len(parts) != 2:
+        print(f"[loop] invalid digest_target format '{target_str}' — expected channel:recipient", file=sys.stderr)
+        return
+    channel, recipient = parts[0].strip(), parts[1].strip()
+
+    # Split into chunks at paragraph boundaries to stay under the limit
+    chunks: list[str] = []
+    paragraphs = text.split("\n\n")
+    current = ""
+    for para in paragraphs:
+        candidate = (current + "\n\n" + para).lstrip("\n") if current else para
+        if len(candidate) > _TG_LIMIT:
+            if current:
+                chunks.append(current.strip())
+            current = para
+        else:
+            current = candidate
+    if current.strip():
+        chunks.append(current.strip())
+
+    if not chunks:
+        return
+
+    for i, chunk in enumerate(chunks, 1):
+        cmd = [
+            "openclaw", "message", "send",
+            "--channel", channel,
+            "--target", recipient,
+            "--message", chunk,
+        ]
+        if dry_run:
+            print(f"[loop] [dry-run] would send chunk {i}/{len(chunks)} to {target_str} ({len(chunk)} chars)")
+            continue
+        print(f"[loop] sending chunk {i}/{len(chunks)} to {target_str} ({len(chunk)} chars)", file=sys.stderr)
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"[loop] send failed: {proc.stderr.strip()}", file=sys.stderr)
+        else:
+            print(f"[loop] sent ok", file=sys.stderr)
 
 
 def _loop_run_dir() -> Path:
@@ -103,7 +157,7 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
 # ── Step 1: Feed Digest ────────────────────────────────────────────────────
 
 
-def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
+def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False) -> dict:
     """Fetch feeds, rank, format digest.
 
     All sources fetch directly via API/subprocess — no browser automation.
@@ -111,6 +165,8 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
       - X profiles: Bird API (from:handle) (step 1b)
       - X home feed: Bird API (filter:follows) (step 1c)
       - YouTube: yt-dlp (step 1d)
+
+    Returns a dict of crawl counts per source.
     """
     feed_raw = _CFG["feed_raw"]
     feeds_file = str(_CFG["feeds_file"])
@@ -119,6 +175,8 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
     ranked_feed = str(feed_raw / "feed_ranked.json")
     sources_file = str(_CFG["sources_file"])
     feed_dir = _SCRIPTS_ROOT / "feed"
+
+    crawl_counts: dict = {}
 
     # Step 1a: Fetch Hacker News stories directly (Algolia API — no browser needed).
     # HN posts are merged into feeds_file so they appear in digest alongside X/PH.
@@ -129,9 +187,11 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
         allow_fail=True,
     )
     hn_path = Path(hn_feed)
+    hn_count = 0
     if hn_path.exists():
         try:
             hn_items = json.loads(hn_path.read_text())
+            hn_count = len(hn_items)
             existing = []
             if Path(feeds_file).exists():
                 existing = json.loads(Path(feeds_file).read_text())
@@ -142,35 +202,57 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
                     seen_urls.add(item["url"])
                     merged.append(item)
             Path(feeds_file).write_text(json.dumps(merged, indent=2))
-            print(f"[loop] Merged {len(hn_items)} HN posts → feeds_file ({len(merged)} total)", file=sys.stderr)
+            print(f"[loop] Merged {hn_count} HN posts → feeds_file ({len(merged)} total)", file=sys.stderr)
         except (json.JSONDecodeError, OSError) as exc:
             print(f"[loop] Could not merge HN feed: {exc}", file=sys.stderr)
+    crawl_counts["hn"] = hn_count
 
     # Step 1b: Crawl X profile sources via Bird API (direct, no browser needed).
     # Falls back silently to browser instructions if credentials are absent.
-    _, _ = run_step(
+    _, xp_out = run_step(
         "X profiles — Bird API (incremental)",
         [sys.executable, str(feed_dir / "refresh.py"),
          "--type", "x_profile", "--output", feeds_file],
         allow_fail=True,
     )
+    crawl_counts["x_profiles"] = sum(
+        int(m) for m in re.findall(r"Bird: fetched (\d+) tweets from @", xp_out)
+    )
 
     # Step 1c: Fetch X home feed via Bird (filter:follows). Direct, no browser.
-    _, _ = run_step(
+    _, xf_out = run_step(
         "X home feed — Bird filter:follows",
         [sys.executable, str(feed_dir / "refresh.py"), "--type", "x_feed"],
         allow_fail=True,
     )
+    m = re.search(r"Bird: fetched (\d+) tweets from home feed", xf_out)
+    crawl_counts["x_feed"] = int(m.group(1)) if m else 0
 
     # Step 1d: Fetch YouTube creator updates (direct via yt-dlp).
     if not skip_youtube:
-        _, _ = run_step(
+        _, yt_out = run_step(
             "Fetch YouTube creator updates",
             [sys.executable, str(feed_dir / "source" / "youtube.py"),
              "--file", sources_file, "--days", str(days),
              "--output", youtube_feed],
             allow_fail=True,
         )
+        try:
+            yt_items = json.loads(yt_out)
+            crawl_counts["youtube"] = len(yt_items) if isinstance(yt_items, list) else 0
+        except (json.JSONDecodeError, ValueError):
+            crawl_counts["youtube"] = 0
+
+    # Step 1e: Crawl knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts).
+    _, kb_out = run_step(
+        "Crawl knowledge sources (RSS / sitemap / YouTube / podcast)",
+        [sys.executable, str(feed_dir / "refresh.py"), "--type", "knowledge"],
+        allow_fail=True,
+    )
+    m = re.search(r"Knowledge: crawled (\d+) new articles", kb_out)
+    crawl_counts["knowledge_articles"] = int(m.group(1)) if m else 0
+    m = re.search(r"Knowledge: (\d+) new feed items merged", kb_out)
+    crawl_counts["knowledge_feed_items"] = int(m.group(1)) if m else 0
 
     # Steps below depend on feeds_file being fully populated by the agent (X + PH).
     _, _ = run_step(
@@ -189,11 +271,27 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False):
 
     _save_step_output("digest", digest_output)
 
+    # Print crawl stats summary
+    total = sum(crawl_counts.values())
+    stats_lines = ["", "─" * 50, "📊 Crawl stats"]
+    label_map = [
+        ("hn", "HN stories"),
+        ("x_feed", "X home feed"),
+        ("x_profiles", "X profiles"),
+        ("youtube", "YouTube"),
+        ("knowledge_feed_items", "Knowledge"),
+    ]
+    for key, label in label_map:
+        if key in crawl_counts:
+            stats_lines.append(f"  {label:<14} {crawl_counts[key]:>4} items")
+    stats_lines.append(f"  {'Total':<14} {total:>4} items")
+    stats_lines.append("─" * 50)
+    print("\n".join(stats_lines))
+
+    return crawl_counts
+
 
 # ── Step 2: Engage ─────────────────────────────────────────────────────────
-
-
-_OUTBOUND_SUGGESTIONS = 5
 
 
 def _load_following(handle: str | None) -> tuple[set[str], str]:
@@ -218,14 +316,36 @@ def _load_following(handle: str | None) -> tuple[set[str], str]:
 
 
 def run_engage():
-    """Suggest X accounts to follow — filtered by who the user already follows.
+    """X engagement: follow candidates, outbound reply candidates, inbound replies.
 
-    Reads X posts from feeds_file, drops accounts already in sources.json or
-    already followed on X, and surfaces the most active remaining accounts.
+    Fetches broad candidate pools via Bird API and formats output for the agent
+    to evaluate against the natural-language targets defined in CHANNELS.md.
+
+    Part 1 — Follow candidates
+        Passive pool from today's feeds.json + active Bird topic search.
+        Agent evaluates against follow_target and selects follows_per_run best.
+
+    Part 2 — Outbound reply candidates
+        Recent posts from home feed, minimal filtering.
+        Agent evaluates against outbound_target and selects outbound_suggestions_per_run best.
+
+    Part 3 — Inbound replies
+        Replies to the user's own recent tweets, ready for draft responses.
     """
+    from datetime import timedelta, timezone as _tz
+
+    x_cfg = load_channel_config("x")
+    follows_cap: int = x_cfg.get("follows_per_run", 5)
+    follow_target: str = x_cfg.get("follow_target", "")
+    outbound_cap: int = x_cfg.get("outbound_suggestions_per_run", 5)
+    outbound_target: str = x_cfg.get("outbound_target", "")
+    inbound_cap: int | None = x_cfg.get("inbound_suggestions_per_run", None)
+    inbound_no_cap: bool = x_cfg.get("inbound_no_cap", True)
+
     feeds_file = Path(_CFG["feeds_file"])
     sources_file = Path(_CFG["sources_file"])
 
+    # Load tracked handles from sources.json
     tracked_handles: set[str] = set()
     if sources_file.exists():
         try:
@@ -237,16 +357,6 @@ def run_engage():
         except (json.JSONDecodeError, OSError):
             pass
 
-    x_posts: list[dict] = []
-    if feeds_file.exists():
-        try:
-            posts = json.loads(feeds_file.read_text())
-            for p in posts:
-                if p.get("source") in ("x", "x_feed") and p.get("author"):
-                    x_posts.append(p)
-        except (json.JSONDecodeError, OSError):
-            pass
-
     my_handle = load_channel_handle("x")
     followed, filter_status = _load_following(my_handle)
     if filter_status != "ok":
@@ -254,61 +364,167 @@ def run_engage():
     else:
         print(f"[loop] @{my_handle} follows {len(followed)} accounts on X", file=sys.stderr)
 
-    # Always exclude the user themselves from suggestions.
     self_exclude = {my_handle.lower()} if my_handle else set()
+    exclude = tracked_handles | followed | self_exclude
 
-    account_posts: dict[str, dict] = {}
-    for p in x_posts:
-        handle = p.get("author", "").lstrip("@").lower()
-        if not handle:
-            continue
-        if handle in tracked_handles or handle in followed or handle in self_exclude:
-            continue
-        text = p.get("content") or p.get("text") or p.get("title") or ""
-        entry = account_posts.setdefault(
-            handle, {"handle": handle, "count": 0, "sample": ""}
-        )
-        entry["count"] += 1
-        if not entry["sample"] and len(text) > 20:
-            entry["sample"] = text[:120]
+    lines: list[str] = []
 
-    top_accounts = sorted(account_posts.values(), key=lambda x: -x["count"])[
-        :_OUTBOUND_SUGGESTIONS
-    ]
+    # ── Part 1: Follow candidates ──────────────────────────────────────────
+    lines += ["", "═" * 50, "👥 ACCOUNTS TO FOLLOW", "═" * 50, ""]
 
-    if top_accounts:
-        if filter_status == "ok":
-            header_note = f"Found {len(top_accounts)} accounts from today's feed that @{my_handle} doesn't follow yet."
-        elif filter_status == "no-handle":
-            header_note = f"Found {len(top_accounts)} candidate accounts — no X handle in CHANNELS.md, follower filter skipped."
-        else:
-            header_note = f"Found {len(top_accounts)} candidate accounts — follower filter unavailable ({filter_status}), double-check before following."
-
-        lines = [
-            "",
-            "═" * 50,
-            "💬 ACCOUNTS TO FOLLOW",
-            "═" * 50,
-            "",
-            header_note,
-            "",
-        ]
-        for acc in top_accounts:
-            lines.append(f"  • @{acc['handle']} — {acc['count']} posts")
-            if acc["sample"]:
-                lines.append(f"    {acc['sample'][:100]}")
-            lines.append(f"    https://x.com/{acc['handle']}")
-            lines.append("")
-        lines.append("Review your recent posts for replies before following any.")
+    if follows_cap == 0:
+        lines.append("  follows_per_run is 0 — follow step skipped.")
     else:
-        lines = [
-            "",
-            "═" * 50,
-            "💬 ENGAGEMENT",
-            "═" * 50,
-            "",
-            "No new accounts found in today's feed. Check for replies manually.",
-        ]
+        if follow_target:
+            lines += [f"  Target: {follow_target}", ""]
+
+        # Passive pool: from today's feeds.json
+        feed_pool: dict[str, dict] = {}
+        if feeds_file.exists():
+            try:
+                for p in json.loads(feeds_file.read_text()):
+                    if p.get("source") not in ("x", "x_feed") or not p.get("author"):
+                        continue
+                    h = p["author"].lstrip("@").lower()
+                    if not h or h in exclude:
+                        continue
+                    text = p.get("content") or p.get("text") or ""
+                    entry = feed_pool.setdefault(h, {"handle": h, "followers": 0, "sample": "", "count": 0})
+                    entry["count"] += 1
+                    if not entry["sample"] and len(text) > 20:
+                        entry["sample"] = text[:120]
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Active pool: Bird topic search
+        topic_pool: list[dict] = []
+        if bird_x.is_available():
+            try:
+                topics = load_topics()
+                keywords = [kw for kws in topics.values() for kw in kws[:2]][:8]
+                if keywords:
+                    print(f"[loop] Bird topic search for follow candidates...", file=sys.stderr)
+                    topic_pool = bird_x.search_accounts_by_topic(keywords, count=80, since_days=7)
+                    topic_pool = [c for c in topic_pool if c["handle"] not in exclude]
+                    print(f"[loop] {len(topic_pool)} topic candidates found", file=sys.stderr)
+            except Exception as e:
+                print(f"[loop] Bird topic search failed: {e}", file=sys.stderr)
+
+        # Merge: topic pool first (has follower counts), fill from feed pool
+        seen: set[str] = set()
+        all_candidates: list[dict] = []
+        for c in topic_pool:
+            if c["handle"] not in seen:
+                seen.add(c["handle"])
+                all_candidates.append(c)
+        for h, c in feed_pool.items():
+            if h not in seen:
+                seen.add(h)
+                all_candidates.append(c)
+
+        if all_candidates:
+            note = f"{len(all_candidates)} candidates found"
+            if filter_status == "ok":
+                note += f" (already-followed accounts filtered out)"
+            else:
+                note += f" (follower filter unavailable: {filter_status})"
+            lines.append(note)
+            lines.append(f"Cap: follow up to {follows_cap} per run.\n")
+            for c in all_candidates:
+                followers_str = f"{c.get('followers', 0):,} followers" if c.get("followers") else "? followers"
+                lines.append(f"  • @{c['handle']} — {followers_str}")
+                if c.get("sample"):
+                    lines.append(f"    {c['sample'][:120]}")
+                lines.append(f"    https://x.com/{c['handle']}")
+                lines.append("")
+            lines.append(
+                f"Agent: evaluate each candidate against the follow_target above. "
+                f"Select the best {follows_cap}. Then run:\n"
+                f"  python3 scripts/act/engage.py --platform x --action follow "
+                f"--handles '@handle1,@handle2,...' --account {my_handle or '_jyek'}"
+            )
+        else:
+            lines.append("  No new follow candidates found.")
+
+    # ── Part 2: Outbound reply candidates ─────────────────────────────────
+    lines += ["", "═" * 50, "💬 OUTBOUND REPLY CANDIDATES", "═" * 50, ""]
+
+    if outbound_cap == 0:
+        lines.append("  outbound_suggestions_per_run is 0 — outbound step skipped.")
+    elif not bird_x.is_available():
+        lines.append("  Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
+    else:
+        if outbound_target:
+            lines += [f"  Target: {outbound_target}", ""]
+
+        try:
+            since_2d = (datetime.now(_tz.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+            print("[loop] fetching home feed for outbound candidates...", file=sys.stderr)
+            home_posts = bird_x.fetch_home_feed(since=since_2d, count=80)
+
+            # Minimal filter: skip very short posts and pure retweets
+            candidates = [
+                p for p in home_posts
+                if len(p.get("content", "")) >= 60 and not p.get("content", "").startswith("RT @")
+            ]
+
+            if candidates:
+                lines.append(
+                    f"{len(candidates)} posts from your home feed (last 48h). "
+                    f"Cap: select up to {outbound_cap} to reply to.\n"
+                )
+                for i, p in enumerate(candidates, 1):
+                    author = p.get("author", "")
+                    content = p.get("content", "")
+                    url = p.get("url", "")
+                    likes = p.get("likes") or 0
+                    replies = p.get("replies") or 0
+                    lines.append(f"  {i}. {author} — {likes}♥ {replies}↩")
+                    lines.append(f"     {content[:160]}")
+                    lines.append(f"     {url}")
+                    lines.append("")
+                lines.append(
+                    f"Agent: evaluate each post against the outbound_target above. "
+                    f"Select the best {outbound_cap}, draft a reply, and present for approval before posting."
+                )
+            else:
+                lines.append("  No suitable posts found in home feed (last 48h).")
+        except Exception as e:
+            lines.append(f"  Outbound fetch failed: {e}")
+            print(f"[loop] outbound error: {e}", file=sys.stderr)
+
+    # ── Part 3: Inbound replies ────────────────────────────────────────────
+    lines += ["", "═" * 50, "📥 INBOUND REPLIES", "═" * 50, ""]
+
+    if inbound_cap == 0 and not inbound_no_cap:
+        lines.append("  inbound_suggestions_per_run is 0 — inbound step skipped.")
+    elif not my_handle:
+        lines.append("  No X handle configured in CHANNELS.md.")
+    elif not bird_x.is_available():
+        lines.append("  Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
+    else:
+        try:
+            print(f"[loop] fetching replies to @{my_handle}...", file=sys.stderr)
+            inbound = bird_x.fetch_replies_to_user(my_handle, since_days=3)
+            if inbound_cap is not None:
+                inbound = inbound[:inbound_cap]
+
+            if inbound:
+                lines.append(f"{len(inbound)} replies to your recent posts (last 3 days):\n")
+                for i, r in enumerate(inbound, 1):
+                    lines.append(f"  {i}. {r['reply_author']} replied to:")
+                    lines.append(f"     \"{r['original_tweet'][:80]}\"")
+                    lines.append(f"     → {r['reply_text'][:200]}")
+                    lines.append(f"     {r['reply_url']}")
+                    lines.append("")
+                lines.append(
+                    "Agent: draft a response to each reply and present for approval before posting."
+                )
+            else:
+                lines.append("  No unanswered replies found in the last 3 days.")
+        except Exception as e:
+            lines.append(f"  Inbound fetch failed: {e}")
+            print(f"[loop] inbound error: {e}", file=sys.stderr)
 
     text = "\n".join(lines)
     print(text)
@@ -395,12 +611,24 @@ def main():
 
     if args.step:
         # Run a single step
+        digest_target = _CFG.get("digest_target")
+        brainstorm_target = _CFG.get("brainstorm_target")
+        engage_target = _CFG.get("engage_target")
         if args.step == "digest":
             run_digest(args.max_posts, args.days, args.skip_youtube)
+            digest_file = _loop_run_dir() / "digest.md"
+            if digest_target and digest_file.exists():
+                _send_to_target(digest_target, digest_file.read_text(), dry_run=args.dry_run)
         elif args.step == "engage":
             run_engage()
+            engage_file = _loop_run_dir() / "engage.md"
+            if engage_target and engage_file.exists():
+                _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
         elif args.step == "brainstorm":
             run_brainstorm()
+            brainstorm_file = _loop_run_dir() / "brainstorm.md"
+            if brainstorm_target and brainstorm_file.exists():
+                _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
         elif args.step == "learn":
             run_learn()
         return
@@ -415,12 +643,18 @@ def main():
     run_ts = datetime.now(timezone.utc).astimezone().isoformat()
     steps: dict = {}
     errors: list[str] = []
+    digest_target = _CFG.get("digest_target")
+    brainstorm_target = _CFG.get("brainstorm_target")
+    engage_target = _CFG.get("engage_target")
 
     # Step 1: Digest
     t0 = time.time()
     try:
-        run_digest(args.max_posts, args.days, args.skip_youtube)
-        steps["digest"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+        counts = run_digest(args.max_posts, args.days, args.skip_youtube)
+        steps["digest"] = {"status": "ok", "duration_s": round(time.time() - t0, 1), "counts": counts}
+        digest_file = _loop_run_dir() / "digest.md"
+        if digest_target and digest_file.exists():
+            _send_to_target(digest_target, digest_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] digest failed: {exc}"
         print(msg, file=sys.stderr)
@@ -432,6 +666,9 @@ def main():
     try:
         run_engage()
         steps["engage"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+        engage_file = _loop_run_dir() / "engage.md"
+        if engage_target and engage_file.exists():
+            _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] engage failed: {exc}"
         print(msg, file=sys.stderr)
@@ -443,6 +680,9 @@ def main():
     try:
         run_brainstorm()
         steps["brainstorm"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
+        brainstorm_file = _loop_run_dir() / "brainstorm.md"
+        if brainstorm_target and brainstorm_file.exists():
+            _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] brainstorm failed: {exc}"
         print(msg, file=sys.stderr)
