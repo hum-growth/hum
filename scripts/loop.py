@@ -43,16 +43,24 @@ _TG_LIMIT = 4000
 def _send_to_target(target_str: str, text: str, dry_run: bool = False) -> None:
     """Send text to a delivery target.
 
-    target_str format: "channel:recipient" e.g. "telegram:-1003734033302"
-    Splits into chunks if text exceeds Telegram's 4000-char limit.
+    target_str formats:
+      "channel:recipient"         e.g. "telegram:-1003734033302"
+      "channel:account:recipient" e.g. "telegram:ghost:1196250983"
+
+    The optional account selects which bot account to send from (passed as
+    --account to the openclaw CLI). Splits into chunks if text exceeds limit.
     """
     if not target_str or not text.strip():
         return
-    parts = target_str.split(":", 1)
-    if len(parts) != 2:
-        print(f"[loop] invalid digest_target format '{target_str}' — expected channel:recipient", file=sys.stderr)
+    parts = target_str.split(":")
+    if len(parts) == 3:
+        channel, account, recipient = parts[0].strip(), parts[1].strip(), parts[2].strip()
+    elif len(parts) == 2:
+        channel, recipient = parts[0].strip(), parts[1].strip()
+        account = None
+    else:
+        print(f"[loop] invalid target format '{target_str}' — expected channel:recipient or channel:account:recipient", file=sys.stderr)
         return
-    channel, recipient = parts[0].strip(), parts[1].strip()
 
     # Split into chunks at paragraph boundaries to stay under the limit
     chunks: list[str] = []
@@ -79,6 +87,8 @@ def _send_to_target(target_str: str, text: str, dry_run: bool = False) -> None:
             "--target", recipient,
             "--message", chunk,
         ]
+        if account:
+            cmd += ["--account", account]
         if dry_run:
             print(f"[loop] [dry-run] would send chunk {i}/{len(chunks)} to {target_str} ({len(chunk)} chars)")
             continue
@@ -367,7 +377,18 @@ def run_engage():
     self_exclude = {my_handle.lower()} if my_handle else set()
     exclude = tracked_handles | followed | self_exclude
 
-    lines: list[str] = []
+    lines: list[str] = []       # full output — printed to stdout + saved to file
+    tg_lines: list[str] = []   # compact output — sent to Telegram (no agent instructions / CLI commands)
+
+    _SEP = "─" * 20
+
+    def _followers_str(c: dict) -> str:
+        f = c.get("followers", 0)
+        if not f:
+            return "? followers"
+        if f >= 1000:
+            return f"{f / 1000:.1f}k followers"
+        return f"{f} followers"
 
     # ── Part 1: Follow candidates ──────────────────────────────────────────
     lines += ["", "═" * 50, "👥 ACCOUNTS TO FOLLOW", "═" * 50, ""]
@@ -431,8 +452,8 @@ def run_engage():
             lines.append(note)
             lines.append(f"Cap: follow up to {follows_cap} per run.\n")
             for c in all_candidates:
-                followers_str = f"{c.get('followers', 0):,} followers" if c.get("followers") else "? followers"
-                lines.append(f"  • @{c['handle']} — {followers_str}")
+                followers_disp = f"{c.get('followers', 0):,} followers" if c.get("followers") else "? followers"
+                lines.append(f"  • @{c['handle']} — {followers_disp}")
                 if c.get("sample"):
                     lines.append(f"    {c['sample'][:120]}")
                 lines.append(f"    https://x.com/{c['handle']}")
@@ -443,8 +464,22 @@ def run_engage():
                 f"  python3 scripts/act/engage.py --platform x --action follow "
                 f"--handles '@handle1,@handle2,...' --account {my_handle or '_jyek'}"
             )
+
+            # Compact Telegram version — cap at 20 candidates, no agent instructions
+            tg_display = all_candidates[:20]
+            tg_lines += [f"👥 Follow — {len(all_candidates)} candidates", _SEP, ""]
+            for c in tg_display:
+                tg_lines.append(f"@{c['handle']} · {_followers_str(c)}")
+                if c.get("sample"):
+                    tg_lines.append(c["sample"][:100])
+                tg_lines.append(f"https://x.com/{c['handle']}")
+                tg_lines.append("")
+            if len(all_candidates) > 20:
+                tg_lines.append(f"… and {len(all_candidates) - 20} more candidates")
+                tg_lines.append("")
         else:
             lines.append("  No new follow candidates found.")
+            tg_lines += [f"👥 Follow", _SEP, "No new follow candidates.", ""]
 
     # ── Part 2: Outbound reply candidates ─────────────────────────────────
     lines += ["", "═" * 50, "💬 OUTBOUND REPLY CANDIDATES", "═" * 50, ""]
@@ -473,6 +508,7 @@ def run_engage():
                     f"{len(candidates)} posts from your home feed (last 48h). "
                     f"Cap: select up to {outbound_cap} to reply to.\n"
                 )
+                tg_lines += [f"💬 Outbound — {len(candidates)} posts", _SEP, ""]
                 for i, p in enumerate(candidates, 1):
                     author = p.get("author", "")
                     content = p.get("content", "")
@@ -483,14 +519,20 @@ def run_engage():
                     lines.append(f"     {content[:160]}")
                     lines.append(f"     {url}")
                     lines.append("")
+                    tg_lines.append(f"{i}. {author} · {likes}♥ {replies}↩")
+                    tg_lines.append(content[:120])
+                    tg_lines.append(url)
+                    tg_lines.append("")
                 lines.append(
                     f"Agent: evaluate each post against the outbound_target above. "
                     f"Select the best {outbound_cap}, draft a reply, and present for approval before posting."
                 )
             else:
                 lines.append("  No suitable posts found in home feed (last 48h).")
+                tg_lines += [f"💬 Outbound", _SEP, "No suitable posts found (last 48h).", ""]
         except Exception as e:
             lines.append(f"  Outbound fetch failed: {e}")
+            tg_lines += [f"💬 Outbound", _SEP, f"Fetch failed: {e}", ""]
             print(f"[loop] outbound error: {e}", file=sys.stderr)
 
     # ── Part 3: Inbound replies ────────────────────────────────────────────
@@ -511,24 +553,34 @@ def run_engage():
 
             if inbound:
                 lines.append(f"{len(inbound)} replies to your recent posts (last 3 days):\n")
+                tg_lines += [f"📥 Inbound — {len(inbound)} replies", _SEP, ""]
                 for i, r in enumerate(inbound, 1):
                     lines.append(f"  {i}. {r['reply_author']} replied to:")
                     lines.append(f"     \"{r['original_tweet'][:80]}\"")
                     lines.append(f"     → {r['reply_text'][:200]}")
                     lines.append(f"     {r['reply_url']}")
                     lines.append("")
+                    tg_lines.append(f"{i}. {r['reply_author']} → \"{r['original_tweet'][:60]}...\"")
+                    tg_lines.append(r['reply_text'][:160])
+                    tg_lines.append(r['reply_url'])
+                    tg_lines.append("")
                 lines.append(
                     "Agent: draft a response to each reply and present for approval before posting."
                 )
             else:
                 lines.append("  No unanswered replies found in the last 3 days.")
+                tg_lines += [f"📥 Inbound", _SEP, "No unanswered replies (last 3 days).", ""]
         except Exception as e:
             lines.append(f"  Inbound fetch failed: {e}")
+            tg_lines += [f"📥 Inbound", _SEP, f"Fetch failed: {e}", ""]
             print(f"[loop] inbound error: {e}", file=sys.stderr)
 
-    text = "\n".join(lines)
-    print(text)
-    _save_step_output("engage", text)
+    full_text = "\n".join(lines)
+    tg_text = "\n".join(tg_lines)
+    print(full_text)
+    _save_step_output("engage", full_text)
+    # Store compact version for Telegram delivery
+    _loop_run_dir().joinpath("engage_tg.md").write_text(tg_text, encoding="utf-8")
 
 
 # ── Step 3: Brainstorm ─────────────────────────────────────────────────────
@@ -561,7 +613,13 @@ def run_brainstorm():
     ]
     text = "\n".join(lines)
     print(text)
-    _save_step_output("brainstorm", brainstorm_output + text)
+    full_text = brainstorm_output + text
+    _save_step_output("brainstorm", full_text)
+    # Compact version for Telegram: just the scored items, no agent instructions
+    tg_text = brainstorm_output.strip()
+    if tg_text:
+        tg_file = _loop_run_dir() / "brainstorm_tg.md"
+        tg_file.write_text(tg_text, encoding="utf-8")
 
 
 # ── Step 4: Learn (Sundays only) ──────────────────────────────────────────
@@ -621,14 +679,14 @@ def main():
                 _send_to_target(digest_target, digest_file.read_text(), dry_run=args.dry_run)
         elif args.step == "engage":
             run_engage()
-            engage_file = _loop_run_dir() / "engage.md"
-            if engage_target and engage_file.exists():
-                _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
+            engage_tg_file = _loop_run_dir() / "engage_tg.md"
+            if engage_target and engage_tg_file.exists():
+                _send_to_target(engage_target, engage_tg_file.read_text(), dry_run=args.dry_run)
         elif args.step == "brainstorm":
             run_brainstorm()
-            brainstorm_file = _loop_run_dir() / "brainstorm.md"
-            if brainstorm_target and brainstorm_file.exists():
-                _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
+            brainstorm_tg_file = _loop_run_dir() / "brainstorm_tg.md"
+            if brainstorm_target and brainstorm_tg_file.exists():
+                _send_to_target(brainstorm_target, brainstorm_tg_file.read_text(), dry_run=args.dry_run)
         elif args.step == "learn":
             run_learn()
         return
@@ -666,9 +724,9 @@ def main():
     try:
         run_engage()
         steps["engage"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
-        engage_file = _loop_run_dir() / "engage.md"
-        if engage_target and engage_file.exists():
-            _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
+        engage_tg_file = _loop_run_dir() / "engage_tg.md"
+        if engage_target and engage_tg_file.exists():
+            _send_to_target(engage_target, engage_tg_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] engage failed: {exc}"
         print(msg, file=sys.stderr)
@@ -680,9 +738,9 @@ def main():
     try:
         run_brainstorm()
         steps["brainstorm"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
-        brainstorm_file = _loop_run_dir() / "brainstorm.md"
-        if brainstorm_target and brainstorm_file.exists():
-            _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
+        brainstorm_tg_file = _loop_run_dir() / "brainstorm_tg.md"
+        if brainstorm_target and brainstorm_tg_file.exists():
+            _send_to_target(brainstorm_target, brainstorm_tg_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] brainstorm failed: {exc}"
         print(msg, file=sys.stderr)

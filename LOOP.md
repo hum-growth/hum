@@ -33,17 +33,13 @@ Requires `AUTH_TOKEN` and `CT0` session cookies in `~/.hum/credentials/x.json` (
 
 ## Step 2 — Engage (parallel with digest)
 
-Analyzes recent X posts in `feeds.json` and surfaces accounts the user isn't already following as follow suggestions. Inbound comment/reply review is handled by `/hum engage` separately, not the loop step.
+Analyzes recent X posts in `feeds.json` and surfaces follow candidates, outbound reply suggestions, and inbound replies awaiting response.
 
 ```bash
 python3 scripts/loop.py --step engage
 ```
 
-After printing the engage output, read `engage_target` from config (`python3 scripts/config.py`). If set, send the output via:
-```
-message(action="send", channel="telegram", target="<engage_target>", message="<engage output>")
-```
-Skip silently if `engage_target` is not configured.
+Sending is handled automatically by the script. If `engage_target` is configured, a compact mobile-friendly version is sent to that target. The full output (including agent instructions) is saved to `<data_dir>/loop/<date>/engage.md`.
 
 ## Step 3 — Brainstorm
 
@@ -55,11 +51,7 @@ Run `scripts/create/brainstorm.py --max 8`. Present top ideas and ask:
 python3 scripts/loop.py --step brainstorm
 ```
 
-After printing the brainstorm output, read `brainstorm_target` from config (`python3 scripts/config.py`). If set, send the summary via:
-```
-message(action="send", channel="telegram", target="<brainstorm_target>", message="<brainstorm summary>")
-```
-Skip silently if `brainstorm_target` is not configured.
+Sending is handled automatically by the script. If `brainstorm_target` is configured, the scored items list is sent to that target. The full output (including agent instructions) is saved to `<data_dir>/loop/<date>/brainstorm.md`.
 
 ## Step 4 — Learn (Sundays only)
 

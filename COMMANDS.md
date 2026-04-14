@@ -71,7 +71,7 @@ Requires `AUTH_TOKEN` and `CT0` session cookies in `~/.hum/credentials/x.json` (
 
 All items are merged into `feeds.json` with `source: "x" | "hn" | "knowledge"`, `topics: [...]`, and engagement counts:
 ```json
-[{"source": "x", "author": "@handle", "text": "...", "likes": 123, "url": "https://x.com/...", "topics": ["AI"]}]
+[{"source": "x", "author": "@handle", "content": "...", "likes": 123, "url": "https://x.com/...", "topics": ["AI"]}]
 ```
 
 You can also crawl knowledge sources independently:
@@ -90,7 +90,7 @@ python3 scripts/feed/source/youtube.py \
   --output <data_dir>/feed/raw/youtube_feed.json
 ```
 
-### Step 3 — Rank and aggregate
+### Step 3 — Rank
 
 ```bash
 python3 scripts/feed/ranker.py \
@@ -98,7 +98,7 @@ python3 scripts/feed/ranker.py \
   --output <data_dir>/feed/raw/feed_ranked.json
 ```
 
-Merge all source outputs (X, YouTube, HN, knowledge) into `feed/feeds.json` — a single aggregated JSON file that other commands (like `/hum brainstorm`) read from.
+Scores and sorts items in `feed/feeds.json` using learned preferences (author weights, topic weights, keyword signals). Output is used by the digest formatter.
 
 ### Step 4 — Format & send digest
 
@@ -114,7 +114,7 @@ Send the output via Telegram. Use:
 message(action="send", channel="telegram", target="<user>", message="<digest>")
 ```
 
-Target: **up to 4 posts per category** (AI / Startups / Crypto). Skip any section with 0 matches.
+Target: **up to 3 posts per category** (AI / Startups / Crypto). Skip any section with 0 matches.
 
 **Telegram output format:**
 ```
@@ -227,10 +227,10 @@ To change, set environment variables or edit `openclaw.json`:
         "enabled": true,
         "config": {
           "hum_data_dir": "~/Documents/hum",
-          "image_model": "gemini",
+          "hum_image_model": "gemini",
           "hum_digest_target": "telegram:-100GROUP_CHANNEL_ID",
-          "hum_brainstorm_target": "telegram:MY_PERSONAL_USER_ID",
-          "hum_engage_target": "telegram:MY_PERSONAL_USER_ID"
+          "hum_brainstorm_target": "telegram:ghost:MY_PERSONAL_USER_ID",
+          "hum_engage_target": "telegram:ghost:MY_PERSONAL_USER_ID"
         }
       }
     }
@@ -241,17 +241,19 @@ To change, set environment variables or edit `openclaw.json`:
 Or via environment variables:
 ```bash
 export HUM_DIGEST_TARGET=telegram:-100GROUP_CHANNEL_ID
-export HUM_BRAINSTORM_TARGET=telegram:MY_PERSONAL_USER_ID
-export HUM_ENGAGE_TARGET=telegram:MY_PERSONAL_USER_ID
+export HUM_BRAINSTORM_TARGET=telegram:ghost:MY_PERSONAL_USER_ID
+export HUM_ENGAGE_TARGET=telegram:ghost:MY_PERSONAL_USER_ID
 ```
+
+**Target format:** `channel:recipient` or `channel:account:recipient`. The optional `account` selects which bot account to send from (e.g. `ghost`). When omitted, the default account is used.
 
 | Config key | Env var | Purpose |
 |---|---|---|
 | `hum_digest_target` | `HUM_DIGEST_TARGET` | Where to send the morning digest |
-| `hum_brainstorm_target` | `HUM_BRAINSTORM_TARGET` | Where to send brainstorm ideas summary |
-| `hum_engage_target` | `HUM_ENGAGE_TARGET` | Where to send follow suggestions from engage step |
+| `hum_brainstorm_target` | `HUM_BRAINSTORM_TARGET` | Where to send brainstorm ideas |
+| `hum_engage_target` | `HUM_ENGAGE_TARGET` | Where to send engage suggestions |
 
-Set `digest_target` to a shared group/channel and `brainstorm_target`/`engage_target` to your personal user ID to keep the digest public and the working session private.
+Set `hum_digest_target` to a shared group/channel and `hum_brainstorm_target`/`hum_engage_target` to your personal DM (via a dedicated bot account) to keep the digest public and the working session private.
 
 Or run `python3 scripts/config.py` to verify resolved paths.
 

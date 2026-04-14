@@ -59,7 +59,7 @@ def load_config() -> dict:
     # Image model: env var → openclaw.json → default
     image_model = os.environ.get("HUM_IMAGE_MODEL")
     if not image_model:
-        image_model = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("image_model")
+        image_model = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("hum_image_model")
     image_model = image_model or "gemini"
 
     # Delivery targets: env var → openclaw.json → None

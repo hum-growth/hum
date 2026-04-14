@@ -78,8 +78,8 @@ Set where each loop step is delivered. Supports any channel target recognised by
       "hum": {
         "config": {
           "hum_digest_target": "telegram:-100YOUR_GROUP_ID",
-          "hum_brainstorm_target": "telegram:YOUR_PERSONAL_ID",
-          "hum_engage_target": "telegram:YOUR_PERSONAL_ID"
+          "hum_brainstorm_target": "telegram:ghost:YOUR_PERSONAL_ID",
+          "hum_engage_target": "telegram:ghost:YOUR_PERSONAL_ID"
         }
       }
     }
@@ -90,9 +90,11 @@ Set where each loop step is delivered. Supports any channel target recognised by
 **Option B — environment variables:**
 ```bash
 export HUM_DIGEST_TARGET=telegram:-100YOUR_GROUP_ID
-export HUM_BRAINSTORM_TARGET=telegram:YOUR_PERSONAL_ID
-export HUM_ENGAGE_TARGET=telegram:YOUR_PERSONAL_ID
+export HUM_BRAINSTORM_TARGET=telegram:ghost:YOUR_PERSONAL_ID
+export HUM_ENGAGE_TARGET=telegram:ghost:YOUR_PERSONAL_ID
 ```
+
+**Target format:** `channel:recipient` or `channel:account:recipient`. The optional `account` selects which bot account sends the message (e.g. `ghost`). When omitted the default account is used.
 
 Any target that is not set is skipped silently — the loop step still runs, output is just not delivered.
 
@@ -301,7 +303,7 @@ Set API keys as environment variables or in `openclaw.json` → `env.vars`:
 }
 ```
 
-Choose the active provider in `openclaw.json` → `skills.entries.hum.config.image_model`:
+Choose the active provider in `openclaw.json` → `skills.entries.hum.config.hum_image_model`:
 
 ```json
 {
@@ -309,7 +311,7 @@ Choose the active provider in `openclaw.json` → `skills.entries.hum.config.ima
     "entries": {
       "hum": {
         "config": {
-          "image_model": "gemini"
+          "hum_image_model": "gemini"
         }
       }
     }

@@ -6,6 +6,7 @@ Orchestrates crawling across source types:
   - x_feed: fetches X home feed via Bird (filter:follows). Direct API, no browser.
   - x_profile: fetches individual X profiles via Bird (from:handle). Direct API.
   - hn: fetches Hacker News stories via Algolia API.
+  - knowledge: crawls RSS, sitemaps, YouTube transcripts, podcasts from knowledge/index.md.
 
 All sources run as direct API/subprocess calls within one Python process.
 No browser automation, no agent-in-the-loop steps.
@@ -13,10 +14,11 @@ No browser automation, no agent-in-the-loop steps.
 Respects last_crawled per source for incremental updates.
 
 Usage:
-    python3 refresh.py [--type x_feed|x_profile|hn|all]
+    python3 refresh.py [--type x_feed|x_profile|hn|knowledge|all]
     python3 refresh.py --type x_feed
     python3 refresh.py --type x_profile
     python3 refresh.py --type hn
+    python3 refresh.py --type knowledge
 """
 import argparse
 import json

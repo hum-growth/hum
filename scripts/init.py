@@ -129,33 +129,29 @@ Where you publish and at what frequency. Only active channels should be listed h
 
 ## LinkedIn
 
+- **handle:** @your_linkedin_handle
 - **Profile URL:**
-- **Account name:**
 - **Frequency:** <!-- e.g. 3x/week -->
 - **Post types:** Post, Article
 - **Notes:** <!-- e.g. no external links in body, always attach an image -->
+- **outbound_suggestions_per_run:** 3
+- **outbound_target:** <!-- Who to reply to — e.g. CFOs and finance operators posting about AI -->
+- **inbound_suggestions_per_run:** no cap
 
 ---
 
 ## X
 
+- **handle:** @your_x_handle
 - **Profile URL:**
-- **Account name:**
 - **Frequency:** <!-- e.g. 2x/week + daily repost -->
 - **Post types:** Tweet, Thread
 - **Notes:** <!-- e.g. links in replies only, keep threads under 10 tweets -->
-
----
-
-## Engage Command Settings
-
-### X
-- **Follows per session:** 5-10
-- **Engagement plays per session:** 3-5
-- **Response drafts:** up to 5
-
-### LinkedIn
-- **Response drafts:** up to 5
+- **follows_per_run:** 5
+- **follow_target:** <!-- Who to follow — e.g. AI founders and operators with 1k–50k followers -->
+- **outbound_suggestions_per_run:** 3
+- **outbound_target:** <!-- What posts to reply to — e.g. fintech and AI posts with active discussion -->
+- **inbound_suggestions_per_run:** no cap
 """,
 }
 

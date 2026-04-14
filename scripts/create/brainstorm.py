@@ -19,7 +19,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
@@ -203,31 +203,38 @@ def main():
     feed_count = sum(1 for _, _, p in scored if p.get("_from") == "feed")
     knowledge_count = sum(1 for _, _, p in scored if p.get("_from") == "knowledge")
 
-    pillar_names = ", ".join(pillars.keys())
-    header_parts = []
+    # Header
+    today = datetime.now().strftime("%a %d %b")
+    print(f"💡 Brainstorm — {today}")
+    count_parts = []
     if feed_count:
-        header_parts.append(f"FEED ({feed_count})")
+        count_parts.append(f"Feed: {feed_count}")
     if knowledge_count:
-        header_parts.append(f"KNOWLEDGE ({knowledge_count})")
-    print(f"BRAINSTORM: {' + '.join(header_parts)} of {len(all_posts)} total")
-    print(f"Pillars: {pillar_names}\n")
-    print("=" * 60)
+        count_parts.append(f"Knowledge: {knowledge_count}")
+    print(" · ".join(count_parts))
+    print()
 
     for i, (score, matched, p) in enumerate(scored, 1):
-        pillars_str = " + ".join(matched)
+        pillars_str = " + ".join(matched[:2])  # limit to 2 pillars for compactness
         if p.get("_from") == "knowledge":
             source = p.get("source", "?")
             ts = p.get("timestamp", "")
-            print(f"\n[{i}] {source} | {ts} | {pillars_str} (score: {score})")
+            ts_display = ts[:7] if ts else ""  # YYYY-MM
+            print(f"{i}. {source} · {ts_display} · {pillars_str}")
         else:
             author = p.get("author", "?").lstrip("@")
             likes = p.get("likes", 0)
-            print(f"\n[{i}] @{author} | {likes:,} likes | {pillars_str} (score: {score})")
-        print(f"    {(p.get('text') or p.get('title') or '').strip()[:300]}")
+            if likes >= 1000:
+                likes_str = f"{likes / 1000:.1f}k♥"
+            else:
+                likes_str = f"{likes}♥"
+            print(f"{i}. @{author} · {likes_str} · {pillars_str}")
+        text_body = (p.get("text") or p.get("title") or "").strip()
+        if text_body:
+            print(f"   {text_body[:160]}")
         if p.get("url"):
-            print(f"    {p['url']}")
-
-    print("\n" + "=" * 60)
+            print(f"   {p['url']}")
+        print()
 
 
 if __name__ == "__main__":

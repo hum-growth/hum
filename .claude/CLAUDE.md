@@ -54,7 +54,6 @@ This creates `venv/` and installs all deps from `requirements.txt`. The venv is 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HUM_DATA_DIR` | `~/Documents/hum` | User data directory |
-| `CREDENTIALS_DIR` | `~/.hum/credentials/` | API credential files |
 | `HUM_X_AUTH_TOKEN` | (from file) | X session AUTH_TOKEN for Bird API |
 | `HUM_X_CT0` | (from file) | X session CT0 cookie for Bird API |
 | `X_USER_ACCESS_TOKEN` | (from file) | X API token override (publishing) |
