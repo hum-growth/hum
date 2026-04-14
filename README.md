@@ -66,9 +66,9 @@ Set the data directory via `openclaw.json` or environment variable (defaults to 
 export HUM_DATA_DIR=~/Documents/hum
 ```
 
-### 2. Configure digest delivery
+### 2. Configure delivery targets
 
-Set where the morning digest is delivered. Supports any channel target recognised by your agent runtime (Telegram chat ID, WhatsApp number, etc.).
+Set where each loop step is delivered. Supports any channel target recognised by your agent runtime (Telegram chat ID, WhatsApp number, etc.). You can route each step to a different destination — e.g. the digest to a shared group channel and brainstorm/engage to your personal DM.
 
 **Option A — openclaw.json** (recommended):
 ```json
@@ -77,7 +77,9 @@ Set where the morning digest is delivered. Supports any channel target recognise
     "entries": {
       "hum": {
         "config": {
-          "hum_digest_target": "telegram:123456789"
+          "hum_digest_target": "telegram:-100YOUR_GROUP_ID",
+          "hum_brainstorm_target": "telegram:YOUR_PERSONAL_ID",
+          "hum_engage_target": "telegram:YOUR_PERSONAL_ID"
         }
       }
     }
@@ -85,12 +87,14 @@ Set where the morning digest is delivered. Supports any channel target recognise
 }
 ```
 
-**Option B — environment variable:**
+**Option B — environment variables:**
 ```bash
-export HUM_DIGEST_TARGET=telegram:123456789
+export HUM_DIGEST_TARGET=telegram:-100YOUR_GROUP_ID
+export HUM_BRAINSTORM_TARGET=telegram:YOUR_PERSONAL_ID
+export HUM_ENGAGE_TARGET=telegram:YOUR_PERSONAL_ID
 ```
 
-If `hum_digest_target` is not set, the daily loop will skip digest delivery and log a warning.
+Any target that is not set is skipped silently — the loop step still runs, output is just not delivered.
 
 ### 3. Setup workspace and content profile
 

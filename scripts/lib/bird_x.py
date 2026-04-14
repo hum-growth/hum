@@ -425,6 +425,109 @@ def fetch_profile(handle: str, since: str | None = None, count: int = 20, timeou
     return _normalize(raw if isinstance(raw, list) else [], handle=handle)
 
 
+def search_accounts_by_topic(
+    keywords: list[str],
+    count: int = 80,
+    since_days: int = 7,
+    timeout: int = 45,
+) -> list[dict]:
+    """Search for active X accounts posting on the given keywords.
+
+    Builds an OR query from the top keywords, fetches matching tweets, and
+    extracts unique authors with follower counts. Returns the full unfiltered
+    pool — callers (or the agent) decide which candidates are relevant.
+
+    Returns list of ``{handle, followers, sample, url}`` sorted by follower
+    count ascending (smaller accounts first).
+    """
+    from datetime import timedelta
+
+    since = (datetime.now() - timedelta(days=since_days)).strftime("%Y-%m-%d")
+    kws = [f'"{k}"' if " " in k else k for k in keywords[:6]]
+    query = f"({' OR '.join(kws)}) since:{since} -filter:retweets lang:en"
+
+    response = _run(query, count, timeout)
+    raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
+
+    seen: dict[str, dict] = {}
+    for tweet in raw:
+        if not isinstance(tweet, dict):
+            continue
+        author = tweet.get("author", {}) or tweet.get("user", {})
+        handle = (author.get("username") or author.get("screen_name") or "").lower().lstrip("@")
+        if not handle or handle in seen:
+            continue
+        followers = _int(
+            author.get("followers_count")
+            or author.get("followersCount")
+            or (author.get("public_metrics") or {}).get("followers_count")
+        ) or 0
+        text = (tweet.get("text") or tweet.get("full_text") or "").strip()
+        url = tweet.get("permanent_url") or tweet.get("url") or ""
+        seen[handle] = {"handle": handle, "followers": followers, "sample": text[:120], "url": url}
+
+    return sorted(seen.values(), key=lambda x: x["followers"])
+
+
+def fetch_replies_to_user(
+    handle: str,
+    since_days: int = 3,
+    max_per_tweet: int = 20,
+    timeout: int = 60,
+) -> list[dict]:
+    """Fetch replies to the user's own recent tweets.
+
+    Gets recent tweets from ``handle``, then searches each conversation for
+    replies not authored by the user.
+
+    Returns list of::
+
+        {
+            original_tweet: str,   # first 100 chars of user's tweet
+            original_url:   str,
+            reply_author:   str,   # @handle
+            reply_text:     str,
+            reply_url:      str,
+            reply_id:       str,
+        }
+    """
+    from datetime import timedelta
+
+    handle = handle.lstrip("@")
+    since = (datetime.now() - timedelta(days=since_days)).strftime("%Y-%m-%d")
+
+    user_tweets = fetch_profile(handle, since=since, count=10, timeout=timeout)
+
+    replies: list[dict] = []
+    for tweet in user_tweets:
+        tweet_id = tweet.get("tweet_id")
+        if not tweet_id:
+            continue
+        reply_query = f"conversation_id:{tweet_id} -from:{handle}"
+        response = _run(reply_query, max_per_tweet, max(10, timeout // 3))
+        raw = response if isinstance(response, list) else response.get("items", response.get("tweets", []))
+        for r in raw:
+            if not isinstance(r, dict):
+                continue
+            author = r.get("author", {}) or r.get("user", {})
+            author_handle = (author.get("username") or author.get("screen_name") or "").lstrip("@")
+            if not author_handle or author_handle.lower() == handle.lower():
+                continue
+            reply_text = (r.get("text") or r.get("full_text") or "").strip()
+            if not reply_text:
+                continue
+            replies.append({
+                "original_tweet": tweet["content"][:100],
+                "original_url": tweet["url"],
+                "reply_author": f"@{author_handle}",
+                "reply_text": reply_text,
+                "reply_url": r.get("permanent_url") or r.get("url") or "",
+                "reply_id": str(r.get("id") or r.get("id_str") or ""),
+            })
+
+    return replies
+
+
 def fetch_home_feed(since: str | None = None, count: int = 100, timeout: int = 90) -> list[dict]:
     """Fetch tweets from followed accounts via Bird (X search with filter:follows).
 

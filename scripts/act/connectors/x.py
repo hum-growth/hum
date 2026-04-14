@@ -409,8 +409,27 @@ def follow(
     handle: str,
     account: str,
 ) -> dict[str, Any]:
-    """Follow an X account. Not yet implemented."""
-    raise NotImplementedError("X follow not yet implemented")
+    """Follow an X account via Bird API (CreateFriendship GraphQL)."""
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent.parent
+    sys.path.insert(0, str(_root))
+    from lib import bird_x as _bird
+
+    creds = load_credentials(account)
+    if not creds:
+        return {"handle": handle, "status": "error", "message": "credentials not found"}
+    _bird.set_credentials(creds["auth_token"], creds["ct0"])
+
+    results = _bird.follow_accounts([handle])
+    if not results:
+        return {"handle": handle, "status": "error", "message": "no result from bird"}
+    r = results[0]
+    return {
+        "handle": handle,
+        "status": "followed" if r.get("success") else "error",
+        "message": r.get("error", ""),
+    }
 
 
 def get_stats(

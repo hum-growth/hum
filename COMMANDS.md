@@ -227,13 +227,31 @@ To change, set environment variables or edit `openclaw.json`:
         "enabled": true,
         "config": {
           "hum_data_dir": "~/Documents/hum",
-          "image_model": "gemini"
+          "image_model": "gemini",
+          "hum_digest_target": "telegram:-100GROUP_CHANNEL_ID",
+          "hum_brainstorm_target": "telegram:MY_PERSONAL_USER_ID",
+          "hum_engage_target": "telegram:MY_PERSONAL_USER_ID"
         }
       }
     }
   }
 }
 ```
+
+Or via environment variables:
+```bash
+export HUM_DIGEST_TARGET=telegram:-100GROUP_CHANNEL_ID
+export HUM_BRAINSTORM_TARGET=telegram:MY_PERSONAL_USER_ID
+export HUM_ENGAGE_TARGET=telegram:MY_PERSONAL_USER_ID
+```
+
+| Config key | Env var | Purpose |
+|---|---|---|
+| `hum_digest_target` | `HUM_DIGEST_TARGET` | Where to send the morning digest |
+| `hum_brainstorm_target` | `HUM_BRAINSTORM_TARGET` | Where to send brainstorm ideas summary |
+| `hum_engage_target` | `HUM_ENGAGE_TARGET` | Where to send follow suggestions from engage step |
+
+Set `digest_target` to a shared group/channel and `brainstorm_target`/`engage_target` to your personal user ID to keep the digest public and the working session private.
 
 Or run `python3 scripts/config.py` to verify resolved paths.
 
@@ -686,32 +704,41 @@ cd scripts && python3 -m act.connectors.linkedin \
 
 ---
 
-## /hum engage [linkedin | x | all]
+## /hum engage [<platform> | all]
 
 **What it does:**
 Three things in one command:
-1. **Follow** 5–10 relevant accounts on X (finance, CFO, AI, fintech)
-2. **Suggest replies** to posts from accounts the user's active X account follows — insightful engagement to build visibility
-3. **Draft responses** to replies/comments on the user's own posts
+1. **Follow** relevant accounts, up to each channel's `follows_per_run` limit
+2. **Suggest outbound replies** to posts from niche accounts, up to each channel's `outbound_suggestions_per_run` limit
+3. **Draft inbound responses** to replies/comments on the user's own posts, per each channel's `inbound_suggestions_per_run` policy
 
-Default: `all` (both platforms). Specify `x` or `linkedin` to scope.
+Default: `all` (every channel in CHANNELS.md). Specify a platform name (e.g. `x`, `linkedin`) to scope to one channel.
 
-**Before running:** Read `<data_dir>/CHANNELS.md` → "Engage Command Settings" to get the per-platform config (follows, engagement plays, response count).
+**Before running:** Read `<data_dir>/CHANNELS.md`. For each `## [Platform]` section, extract:
+- `handle` — the account to act as on that platform
+- `follows_per_run` — max new follows this run (0 = skip); `follow_target` — natural language description of who to follow
+- `outbound_suggestions_per_run` — max outbound suggestions (0 = skip); `outbound_target` — what kinds of posts are worth replying to
+- `inbound_suggestions_per_run` — how many inbound replies/comments to surface
+
+Use `follow_target` and `outbound_target` as your evaluation criteria when reviewing candidate pools from the engage script output. The script surfaces a broad unfiltered pool — you decide which candidates match the target description and select up to the per-run cap. Do not assume a fixed list of platforms.
 
 **⚠️ Never post anything without the user's explicit approval.**
 
 ---
 
-### Part 1 — Follow relevant accounts (X only)
+### Part 1 — Follow relevant accounts
 
-1. Open https://x.com in the OpenClaw browser using the user's active X account
-2. Search for 5–10 accounts in categories that match the user's niche and audience, using `<data_dir>/AUDIENCE.md` and `<data_dir>/CHANNELS.md` as the source of truth. Derive the relevant topics, industries, and account types from those files — do not assume a specific niche.
-3. For each: navigate to their profile, click Follow if not already following
-4. Skip accounts already followed (check before clicking)
-5. Report: "Followed X new accounts: [list]"
+For each channel in CHANNELS.md (in order):
+- If `follows_per_run` is 0, skip this channel entirely.
+- Open the platform in the browser, signed in as `handle`.
+- Search for candidate accounts whose topics match the user's niche and audience (read `<data_dir>/AUDIENCE.md` and `<data_dir>/CONTENT.md` — do not assume a fixed niche).
+- For each candidate: navigate to their profile, check their follower count against the range specified in `follows_per_run`, follow if not already following.
+- Stop once you have followed `follows_per_run` new accounts — do not exceed this limit.
+- Skip accounts already followed.
+- Report per channel: "Followed N new accounts on [Platform]: [list]"
 
 **Prioritise accounts that:**
-- Have 10K+ followers in finance/CFO/AI space
+- Have a follower count within the range specified in `follows_per_run`
 - Post regularly (active in last 7 days)
 - Are not already followed
 
@@ -719,19 +746,22 @@ Default: `all` (both platforms). Specify `x` or `linkedin` to scope.
 
 ### Part 2 — Suggest outbound replies (engagement plays)
 
-**Goal:** Reply to recent posts from niche accounts in a way that feels authentic, adds real value, and builds visibility in the right circles.
+For each channel in CHANNELS.md (in order):
+- If `outbound_suggestions_per_run` is 0, skip this channel entirely.
 
-**Step 1 — Identify target accounts**
+**Goal:** Reply to recent posts from niche accounts in a way that feels authentic, adds real value, and builds visibility.
 
-Pull target accounts from two sources:
-1. `<data_dir>/feed/sources.json` — entries with `type: x_profile`
-2. `<data_dir>/knowledge/index.md` — the "Influencers & Thought Leaders" tables (Name + Platform columns)
+**Step 1 — Identify target accounts for this channel**
 
-Combine into a single candidate list. Prioritise accounts that appear in both sources — these are most relevant to the user's niche.
+Pull candidate accounts from:
+1. `<data_dir>/feed/sources.json` — entries matching this platform
+2. `<data_dir>/knowledge/index.md` — "Influencers & Thought Leaders" tables filtered to this platform
+
+Combine into a single list. Prioritise accounts appearing in both sources.
 
 **Step 2 — Find recent posts worth replying to**
 
-For each candidate account (work through 8–12 to find 3–5 good matches):
+Work through candidates until you have found `outbound_suggestions_per_run` good matches for this channel — do not exceed this limit. For each candidate:
 1. Navigate to their profile in the browser
 2. Find their most recent post from the **last 48 hours** — skip if nothing recent
 3. Read the full post text carefully
@@ -750,18 +780,18 @@ For each selected post, draft a reply that:
 - **Anchors to something specific** in the post — a stat, a claim, a specific phrase. Never summarise generically.
 - **Does one of:** adds a related data point, offers a contrarian take with a concrete reason, or extends the argument with a specific example
 - **Feels like a person wrote it** — no filler openers ("Great point!", "Love this", "So true", "This is spot on"). Start with the substance.
-- **Is concise** — 1–2 sentences for X (under 280 chars), 2–3 sentences for LinkedIn
-- **Matches the user's voice** per VOICE.md — calm, direct, grounded in specifics
+- **Is concise** — respect the platform's character limits
+- **Matches the user's voice** per VOICE.md
 
 **Step 4 — Present for approval**
 
 ```
 💬 Engagement Plays — suggested replies
 
-1. @[account] on [platform] — "[exact quote or key claim from their post]"
+1. @[account] on [Platform] — "[exact quote or key claim from their post]"
    → [drafted reply]
 
-2. @[account] on [platform] — "[exact quote or key claim from their post]"
+2. @[account] on [Platform] — "[exact quote or key claim from their post]"
    → [drafted reply]
 ```
 
@@ -769,75 +799,52 @@ Ask: "Which should I post? Any edits?"
 
 ---
 
-### Part 3 — Gather posts and inbound comments
+### Part 3 — Gather inbound comments and replies
 
-**LinkedIn:**
-1. Open the user's recent LinkedIn activity page in the OpenClaw browser
-2. If not logged in, stop and ask the user to log in first
-3. Scan the 5 most recent posts
-4. For each post, click into it and read the comments section
-5. Collect comments that haven't been replied to by the user yet
-6. Skip: generic congratulations ("Great post!"), spam, and comments with no substance worth engaging
-
-**X (Twitter):**
-1. Open the user's relevant X account
-2. Check the 5 most recent tweets/threads from the relevant configured account
-3. For each, click into it and read the replies
-4. Collect replies that haven't been responded to yet
-5. Skip: bots, spam, generic "nice" replies, and trolls not worth engaging
+For each channel in CHANNELS.md (in order):
+- Read `inbound_suggestions_per_run` for this channel. If the value is 0, skip. If it says "no cap" or similar, collect all unanswered replies/comments.
+- Open the user's profile/activity page on this platform, signed in as `handle`.
+- If not logged in, stop and ask the user to log in first.
+- Scan the 5 most recent posts on this channel.
+- For each post, read the replies/comments section.
+- Collect replies or comments that haven't been responded to by the user yet, up to the `inbound_suggestions_per_run` limit.
+- Skip: bots, spam, generic one-liners ("Great post!", "Nice!"), and low-quality replies not worth engaging.
 
 ### Part 4 — Draft inbound responses
 
-1. Read `<data_dir>/VOICE.md` for tone and style
-2. For each comment worth responding to, draft a reply that:
-   - Matches the user's voice — calm, direct, no fluff if that is what `VOICE.md` specifies
-   - Adds value — extends the point, shares a specific insight, asks a follow-up
-   - Is concise — 1–3 sentences max for LinkedIn, under 280 chars for X
+1. Read `<data_dir>/VOICE.md` for tone and style.
+2. For each collected comment/reply, draft a response that:
+   - Matches the user's voice per VOICE.md
+   - Adds value — extends the point, shares a specific insight, or asks a follow-up
+   - Is concise — respect the platform's character limits
    - Feels human — not templated, not sycophantic
-   - Engages thoughtfully with the commenter's specific point
-3. Present all drafts in a numbered table:
+   - Engages with the commenter's specific point
+3. Present all drafts grouped by channel:
 
 ```
 💬 Responses Ready
 
-LinkedIn — [Post title / first line]
+[Platform] — [Post title / first line]
   1. @[commenter]: "[their comment summary]"
      → [your drafted response]
 
   2. @[commenter]: "[their comment summary]"
      → [your drafted response]
 
-X — [Tweet text summary]
+[Platform] — [Post title / first line]
   3. @[replier]: "[their reply summary]"
      → [your drafted response]
-
-  (no replies needing response)
 ```
 
 4. Ask: "Which responses should I post? (numbers, 'all', or 'none')"
 
 ### Part 5 — Post approved responses
 
-**On approval (numbers or "all"):**
-
-**LinkedIn:**
-1. Navigate to the specific post
-2. Find the comment being replied to
-3. Click "Reply" under that comment
-4. Type the approved response text
-5. Click the reply/submit button
-6. Screenshot to confirm
-
-**X:**
-1. Navigate to the specific tweet/reply
-2. Click "Reply"
-3. Type the approved response text
-4. Click "Reply" to post
-5. Screenshot to confirm
+For each approved response, navigate to the specific post on the relevant platform (signed in as the channel's `handle`), post the reply, and confirm it went through.
 
 **After posting all approved responses:**
 - Report: "Posted X/Y responses. [list which ones]"
-- If any failed (not logged in, rate limit, element not found), report the error per response
+- If any failed (not logged in, rate limit, element not found), report the error per response.
 
 ### Response style guidelines
 

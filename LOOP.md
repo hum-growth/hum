@@ -16,7 +16,7 @@ All sources fetch directly via API — no browser automation:
 
 All items merge into `feeds.json`, then rank and format a digest sent via Telegram.
 
-Knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) are **not** crawled by the loop digest step — use `/hum refresh-feed` or `/hum crawl` for that.
+Knowledge sources (RSS, sitemaps, YouTube transcripts, podcasts from `knowledge/index.md`) are also crawled as part of this step via `refresh.py --type knowledge`.
 
 ```bash
 python3 scripts/loop.py --step digest
@@ -39,6 +39,12 @@ Analyzes recent X posts in `feeds.json` and surfaces accounts the user isn't alr
 python3 scripts/loop.py --step engage
 ```
 
+After printing the engage output, read `engage_target` from config (`python3 scripts/config.py`). If set, send the output via:
+```
+message(action="send", channel="telegram", target="<engage_target>", message="<engage output>")
+```
+Skip silently if `engage_target` is not configured.
+
 ## Step 3 — Brainstorm
 
 Run `scripts/create/brainstorm.py --max 8`. Present top ideas and ask:
@@ -48,6 +54,12 @@ Run `scripts/create/brainstorm.py --max 8`. Present top ideas and ask:
 ```bash
 python3 scripts/loop.py --step brainstorm
 ```
+
+After printing the brainstorm output, read `brainstorm_target` from config (`python3 scripts/config.py`). If set, send the summary via:
+```
+message(action="send", channel="telegram", target="<brainstorm_target>", message="<brainstorm summary>")
+```
+Skip silently if `brainstorm_target` is not configured.
 
 ## Step 4 — Learn (Sundays only)
 

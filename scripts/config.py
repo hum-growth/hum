@@ -62,14 +62,18 @@ def load_config() -> dict:
         image_model = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {}).get("image_model")
     image_model = image_model or "gemini"
 
-    # Digest delivery target: env var → openclaw.json → None
+    # Delivery targets: env var → openclaw.json → None
     hum_cfg = oc_data.get("skills", {}).get("entries", {}).get("hum", {}).get("config", {})
     digest_target = os.environ.get("HUM_DIGEST_TARGET") or hum_cfg.get("hum_digest_target") or None
+    brainstorm_target = os.environ.get("HUM_BRAINSTORM_TARGET") or hum_cfg.get("hum_brainstorm_target") or None
+    engage_target = os.environ.get("HUM_ENGAGE_TARGET") or hum_cfg.get("hum_engage_target") or None
 
     return {
         "data_dir": data_dir,
         "image_model": image_model,
         "digest_target": digest_target,
+        "brainstorm_target": brainstorm_target,
+        "engage_target": engage_target,
         "feed_dir": data_dir / "feed",
         "feeds_file": data_dir / "feed" / "feeds.json",
         "feed_raw": data_dir / "feed" / "raw",
@@ -164,9 +168,12 @@ def load_topics(data_dir: Path | None = None) -> dict[str, list[str]]:
 def load_channel_handle(platform: str, data_dir: Path | None = None) -> str | None:
     """Return the configured handle for a platform from CHANNELS.md.
 
-    Parses `## X (@handle)` / `## LinkedIn (@handle)` headers. Matching is
-    case-insensitive on the platform name. Returns the handle without the
-    leading `@`, or None if not found.
+    Supports two formats:
+      - Header: `## X (@handle)` — handle in the section header
+      - Field:  `## X` followed by `- **handle:** @handle` in the section body
+
+    Matching is case-insensitive on the platform name. Returns the handle
+    without the leading `@`, or None if not found.
     """
     if data_dir is None:
         data_dir = load_config()["data_dir"]
@@ -178,15 +185,102 @@ def load_channel_handle(platform: str, data_dir: Path | None = None) -> str | No
     platform_lower = platform.strip().lower()
     try:
         with channels_md.open(encoding="utf-8") as f:
+            in_section = False
             for line in f:
-                m = re.match(r"^##\s+([^\s(]+)\s*\(@([^)\s]+)\)", line)
-                if not m:
+                # Match section header — try inline handle first
+                m = re.match(r"^##\s+([^\s(]+)\s*(?:\(@([^)\s]+)\))?", line)
+                if m:
+                    in_section = m.group(1).strip().lower() == platform_lower
+                    if in_section and m.group(2):
+                        return m.group(2).strip()
                     continue
-                if m.group(1).strip().lower() == platform_lower:
-                    return m.group(2).strip()
+                # Inside the matching section, look for `- **handle:** @handle`
+                if in_section:
+                    hm = re.match(r"\s*-\s+\*\*handle:\*\*\s+@?(\S+)", line)
+                    if hm:
+                        return hm.group(1).strip()
     except OSError:
         return None
     return None
+
+
+def _parse_count(value: str) -> int:
+    """Return the leading integer from a field value, e.g. '5' or '5. some text' → 5."""
+    m = re.match(r"^\s*(\d+)", value)
+    return int(m.group(1)) if m else 0
+
+
+def load_channel_config(platform: str, data_dir: Path | None = None) -> dict:
+    """Return the full parsed config for a channel from CHANNELS.md.
+
+    Reads all ``- **key:** value`` fields under the ``## Platform`` section.
+    Returns:
+
+        handle                        str | None
+        follows_per_run               int   (0 = skip)
+        follow_target                 str   (free text, '' if absent)
+        outbound_suggestions_per_run  int
+        outbound_target               str   (free text, '' if absent)
+        inbound_suggestions_per_run   int | None  (None = no cap)
+        inbound_no_cap                bool
+        raw                           dict[str, str]
+    """
+    if data_dir is None:
+        data_dir = load_config()["data_dir"]
+
+    channels_md = data_dir / "CHANNELS.md"
+    if not channels_md.exists():
+        return {}
+
+    platform_lower = platform.strip().lower()
+    raw_fields: dict[str, str] = {}
+    in_section = False
+
+    try:
+        with channels_md.open(encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"^##\s+([^\s(#]+)", line)
+                if m:
+                    if in_section:
+                        break  # left our section
+                    in_section = m.group(1).strip().lower() == platform_lower
+                    continue
+                if not in_section:
+                    continue
+                fm = re.match(r"\s*-\s+\*\*([^*]+):\*\*\s*(.*)", line)
+                if fm:
+                    raw_fields[fm.group(1).strip().lower()] = fm.group(2).strip()
+    except OSError:
+        return {}
+
+    if not raw_fields:
+        return {}
+
+    handle = raw_fields.get("handle", "").lstrip("@") or None
+
+    follows_count = _parse_count(raw_fields.get("follows_per_run", "0"))
+    outbound_count = _parse_count(raw_fields.get("outbound_suggestions_per_run", "0"))
+
+    inbound_raw = raw_fields.get("inbound_suggestions_per_run", "0")
+    inbound_no_cap = "no cap" in inbound_raw.lower() or (
+        "all" in inbound_raw.lower() and "unanswered" in inbound_raw.lower()
+    )
+    inbound_m = re.match(r"^\s*(\d+)", inbound_raw)
+    inbound_count: int | None = (
+        int(inbound_m.group(1)) if inbound_m else (None if inbound_no_cap else 0)
+    )
+
+    return {
+        "platform": platform,
+        "handle": handle,
+        "follows_per_run": follows_count,
+        "follow_target": raw_fields.get("follow_target", ""),
+        "outbound_suggestions_per_run": outbound_count,
+        "outbound_target": raw_fields.get("outbound_target", ""),
+        "inbound_suggestions_per_run": inbound_count,
+        "inbound_no_cap": inbound_no_cap,
+        "raw": raw_fields,
+    }
 
 
 def load_x_credentials() -> dict[str, str | None]:
