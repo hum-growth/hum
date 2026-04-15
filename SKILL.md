@@ -103,7 +103,7 @@ Images for posts are generated using the bundled image-gen library at `scripts/l
 | **grok** | grok-2-image | `XAI_API_KEY` |
 | **minimax** | image-01 | `MINIMAX_API_KEY` |
 
-API keys are set as environment variables or in `openclaw.json` → `env.vars`. The active provider is configured in `openclaw.json` → `skills.entries.hum.config.image_model` (default: `gemini`) or via the `HUM_IMAGE_MODEL` env var.
+API keys are set as environment variables or in `openclaw.json` → `env.vars`. The active provider is configured in `openclaw.json` → `skills.entries.hum.config.hum_image_model` (default: `gemini`) or via the `HUM_IMAGE_MODEL` env var.
 
 When drafting, add `image_prompt` to the post. Calling `validate(post)` auto-generates the image and sets `media_path`. If `VOICE.md` has a `## Visual Style` section, it is automatically appended to the image prompt.
 

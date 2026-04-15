@@ -73,8 +73,8 @@ def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
         if max_articles and saved >= max_articles:
             break
 
-        url = entry.get("link", "") or entry.get("id", "")
-        if not url or url in already:
+        entry_id = entry.get("link", "") or entry.get("id", "")
+        if not entry_id or entry_id in already:
             continue
 
         title = entry.get("title", "Untitled")
@@ -91,7 +91,7 @@ def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
             from datetime import date as _date
             date = _date.today().strftime("%Y-%m-%d")
 
-        filename = make_filename(date, url)
+        filename = make_filename(date, entry_id)
         dest = out_dir / filename
         if not recrawl and dest.exists():
             continue
@@ -127,6 +127,13 @@ def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
 
         print(f"   -> {title[:60]}")
         body = f"## Shownotes\n\n{description}\n"
+
+        # Resolve a proper URL for the frontmatter — prefer the episode
+        # webpage link; fall back to the audio URL when link is a bare
+        # UUID (some podcast feeds like Bankless only provide a GUID).
+        url = entry_id
+        if not url.startswith("http"):
+            url = audio_url or entry_id
 
         extra = {}
         if audio_url:

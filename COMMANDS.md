@@ -31,7 +31,7 @@ python3 scripts/init.py
 **Folders:**
 - `feed/`, `feed/raw/`, `feed/assets/`
 - `content/`, `content/drafts/`, `content/published/`, `content/images/`
-- `content-samples/`, `knowledge/`, `ideas/`, `learn/`
+- `content-samples/`, `knowledge/`, `ideas/`, `learn/`, `loop/`
 
 After running, edit each file to set up your profile. The content pillars in `CONTENT.md` drive feed classification and brainstorming.
 
@@ -732,15 +732,16 @@ Use `follow_target` and `outbound_target` as your evaluation criteria when revie
 
 For each channel in CHANNELS.md (in order):
 - If `follows_per_run` is 0, skip this channel entirely.
-- Open the platform in the browser, signed in as `handle`.
-- Search for candidate accounts whose topics match the user's niche and audience (read `<data_dir>/AUDIENCE.md` and `<data_dir>/CONTENT.md` — do not assume a fixed niche).
-- For each candidate: navigate to their profile, check their follower count against the range specified in `follows_per_run`, follow if not already following.
-- Stop once you have followed `follows_per_run` new accounts — do not exceed this limit.
-- Skip accounts already followed.
+- The engage script surfaces a broad candidate pool from today's `feeds.json` and Bird API topic search, filtered against already-followed accounts.
+- Evaluate candidates against the `follow_target` criteria and select up to `follows_per_run` best matches.
+- Run the follow action:
+  ```bash
+  python3 scripts/act/engage.py --platform x --action follow --handles '@handle1,@handle2,...' --account <handle>
+  ```
 - Report per channel: "Followed N new accounts on [Platform]: [list]"
 
 **Prioritise accounts that:**
-- Have a follower count within the range specified in `follows_per_run`
+- Match the `follow_target` description in CHANNELS.md
 - Post regularly (active in last 7 days)
 - Are not already followed
 
@@ -753,20 +754,13 @@ For each channel in CHANNELS.md (in order):
 
 **Goal:** Reply to recent posts from niche accounts in a way that feels authentic, adds real value, and builds visibility.
 
-**Step 1 — Identify target accounts for this channel**
+**Step 1 — Get candidate posts**
 
-Pull candidate accounts from:
-1. `<data_dir>/feed/sources.json` — entries matching this platform
-2. `<data_dir>/knowledge/index.md` — "Influencers & Thought Leaders" tables filtered to this platform
+The engage script fetches recent posts from your home feed (last 48h) via Bird API, filtering out very short posts and pure retweets. It presents a broad pool for evaluation.
 
-Combine into a single list. Prioritise accounts appearing in both sources.
+**Step 2 — Select posts worth replying to**
 
-**Step 2 — Find recent posts worth replying to**
-
-Work through candidates until you have found `outbound_suggestions_per_run` good matches for this channel — do not exceed this limit. For each candidate:
-1. Navigate to their profile in the browser
-2. Find their most recent post from the **last 48 hours** — skip if nothing recent
-3. Read the full post text carefully
+Evaluate candidates against the `outbound_target` criteria. Select up to `outbound_suggestions_per_run` best matches.
 
 A post is worth replying to if it:
 - Makes a specific claim, shares data, or argues a position
@@ -805,11 +799,8 @@ Ask: "Which should I post? Any edits?"
 
 For each channel in CHANNELS.md (in order):
 - Read `inbound_suggestions_per_run` for this channel. If the value is 0, skip. If it says "no cap" or similar, collect all unanswered replies/comments.
-- Open the user's profile/activity page on this platform, signed in as `handle`.
-- If not logged in, stop and ask the user to log in first.
-- Scan the 5 most recent posts on this channel.
-- For each post, read the replies/comments section.
-- Collect replies or comments that haven't been responded to by the user yet, up to the `inbound_suggestions_per_run` limit.
+- The engage script fetches replies to the user's recent tweets (last 3 days) via Bird API.
+- Replies are presented up to the `inbound_suggestions_per_run` limit.
 - Skip: bots, spam, generic one-liners ("Great post!", "Nice!"), and low-quality replies not worth engaging.
 
 ### Part 4 — Draft inbound responses
@@ -842,11 +833,14 @@ For each channel in CHANNELS.md (in order):
 
 ### Part 5 — Post approved responses
 
-For each approved response, navigate to the specific post on the relevant platform (signed in as the channel's `handle`), post the reply, and confirm it went through.
+For each approved response, post via the API connector:
+```bash
+python3 scripts/act/engage.py --platform x --action comment --post-url URL --text "reply" --account <handle>
+```
 
 **After posting all approved responses:**
 - Report: "Posted X/Y responses. [list which ones]"
-- If any failed (not logged in, rate limit, element not found), report the error per response.
+- If any failed (missing credentials, rate limit, API error), report the error per response.
 
 ### Response style guidelines
 

@@ -244,13 +244,15 @@ def main():
             summary = text_body
             if summary.startswith(topic):
                 summary = summary[len(topic):].lstrip(". \n")
+            # Clean up: collapse newlines into spaces for a tidy one-liner
             if summary:
-                # Take up to ~200 chars, ending at a sentence boundary if possible
+                summary = " ".join(summary.split())
                 chunk = summary[:200]
                 dot = chunk.rfind(". ")
                 if dot > 60:
                     chunk = chunk[:dot + 1]
-                print(f"   {chunk.strip()}")
+                if chunk.strip():
+                    print(f"   {chunk.strip()}")
 
             # Why: pillar relevance and engagement signal
             why_parts = []
@@ -263,18 +265,14 @@ def main():
             if why_parts:
                 print(f"   Why: {' · '.join(why_parts)}")
 
-            # Ref: source attribution with link
-            ref_parts = []
-            if p.get("_from") == "knowledge":
-                ref_parts.append(p.get("source", "?"))
+            # Ref: link to the source (prefer URL, fall back to author)
+            url = p.get("url", "")
+            if url and url.startswith("http"):
+                print(f"   Ref: {url}")
             else:
                 author = p.get("author", "")
                 if author:
-                    ref_parts.append(author if author.startswith("@") else f"@{author}")
-            if p.get("url"):
-                ref_parts.append(p["url"])
-            if ref_parts:
-                print(f"   Ref: {' — '.join(ref_parts)}")
+                    print(f"   Ref: {author if author.startswith('@') else '@' + author}")
             print()
 
 

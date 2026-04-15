@@ -33,6 +33,7 @@ FOLDERS = [
     "knowledge",
     "ideas",
     "learn",
+    "loop",
 ]
 
 TEMPLATES = {
