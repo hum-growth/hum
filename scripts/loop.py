@@ -20,10 +20,12 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -325,6 +327,97 @@ def _load_following(handle: str | None) -> tuple[set[str], str]:
     return followed, "ok"
 
 
+def _draft_replies(posts: list[dict], voice_text: str, outbound_target: str) -> dict[str, str]:
+    """Draft short replies for outbound posts using the OpenAI API.
+
+    Returns a dict mapping post URL to suggested reply text.
+    Falls back gracefully to empty dict if no API key or on error.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    model = os.environ.get("HUM_REPLY_MODEL", "gpt-4o-mini")
+
+    if not api_key or not posts:
+        return {}
+
+    # Build a single batch prompt for all posts
+    post_blocks = []
+    for i, p in enumerate(posts, 1):
+        author = p.get("author", "")
+        content = p.get("content", "")[:300]
+        url = p.get("url", "")
+        post_blocks.append(f"POST {i} by {author}:\n{content}\nURL: {url}")
+
+    posts_text = "\n\n".join(post_blocks)
+
+    system_prompt = (
+        "You are a social media engagement assistant. Draft a short reply (1-2 sentences) "
+        "for each post below. Each reply must:\n"
+        "- Anchor to something specific in the post (a stat, claim, or phrase)\n"
+        "- Add value: a data point, contrarian take with reason, or concrete example\n"
+        "- Sound human — no filler openers like 'Great point!', 'Love this', 'So true'\n"
+        "- Be concise (under 280 characters)\n"
+        "- Match this voice:\n\n"
+        f"{voice_text[:800]}\n\n"
+        f"Target posts to reply to: {outbound_target}\n\n"
+        "Output format — one reply per line, numbered to match:\n"
+        "1. [reply text]\n"
+        "2. [reply text]\n"
+        "...\n"
+    )
+
+    try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": posts_text},
+            ],
+            "max_tokens": 600,
+            "temperature": 0.7,
+        }
+
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers=headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+
+        raw = data["choices"][0]["message"]["content"].strip()
+
+        # Parse numbered replies
+        replies: dict[str, str] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Match "1. reply text" or "1) reply text"
+            m = re.match(r"(\d+)[.)]\s*(.*)", line)
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(posts):
+                    post_url = posts[idx].get("url", "")
+                    if post_url:
+                        replies[post_url] = m.group(2).strip()
+
+        print(f"[loop] drafted {len(replies)} replies for outbound posts", file=sys.stderr)
+        return replies
+
+    except Exception as exc:
+        print(f"[loop] reply drafting failed ({exc}) — skipping", file=sys.stderr)
+        return {}
+
+
 def run_engage():
     """X engagement: follow candidates, outbound reply candidates, inbound replies.
 
@@ -465,8 +558,8 @@ def run_engage():
                 f"--handles '@handle1,@handle2,...' --account {my_handle or '_jyek'}"
             )
 
-            # Compact Telegram version — cap at 20 candidates, no agent instructions
-            tg_display = all_candidates[:20]
+            # Compact Telegram version — cap at follows_per_run, no agent instructions
+            tg_display = all_candidates[:follows_cap]
             tg_lines += [f"👥 Follow — {len(all_candidates)} candidates", _SEP, ""]
             for c in tg_display:
                 tg_lines.append(f"@{c['handle']} · {_followers_str(c)}")
@@ -474,8 +567,8 @@ def run_engage():
                     tg_lines.append(c["sample"][:100])
                 tg_lines.append(f"https://x.com/{c['handle']}")
                 tg_lines.append("")
-            if len(all_candidates) > 20:
-                tg_lines.append(f"… and {len(all_candidates) - 20} more candidates")
+            if len(all_candidates) > follows_cap:
+                tg_lines.append(f"… and {len(all_candidates) - follows_cap} more candidates")
                 tg_lines.append("")
         else:
             lines.append("  No new follow candidates found.")
@@ -508,7 +601,19 @@ def run_engage():
                     f"{len(candidates)} posts from your home feed (last 48h). "
                     f"Cap: select up to {outbound_cap} to reply to.\n"
                 )
-                tg_lines += [f"💬 Outbound — {len(candidates)} posts", _SEP, ""]
+
+                # Draft replies for the capped outbound posts
+                tg_posts = candidates[:outbound_cap]
+                voice_file = _CFG["data_dir"] / "VOICE.md"
+                voice_text = ""
+                if voice_file.exists():
+                    try:
+                        voice_text = voice_file.read_text(encoding="utf-8")[:1200]
+                    except OSError:
+                        pass
+                reply_drafts = _draft_replies(tg_posts, voice_text, outbound_target)
+
+                tg_lines += [f"💬 Outbound — {outbound_cap} suggestions", _SEP, ""]
                 for i, p in enumerate(candidates, 1):
                     author = p.get("author", "")
                     content = p.get("content", "")
@@ -519,10 +624,14 @@ def run_engage():
                     lines.append(f"     {content[:160]}")
                     lines.append(f"     {url}")
                     lines.append("")
-                    tg_lines.append(f"{i}. {author} · {likes}♥ {replies}↩")
-                    tg_lines.append(content[:120])
-                    tg_lines.append(url)
-                    tg_lines.append("")
+                    if i <= outbound_cap:
+                        tg_lines.append(f"{i}. {author} · {likes}♥ {replies}↩")
+                        tg_lines.append(content[:120])
+                        tg_lines.append(url)
+                        draft = reply_drafts.get(url, "")
+                        if draft:
+                            tg_lines.append(f"→ {draft}")
+                        tg_lines.append("")
                 lines.append(
                     f"Agent: evaluate each post against the outbound_target above. "
                     f"Select the best {outbound_cap}, draft a reply, and present for approval before posting."

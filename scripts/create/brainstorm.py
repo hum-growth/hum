@@ -212,29 +212,70 @@ def main():
     if knowledge_count:
         count_parts.append(f"Knowledge: {knowledge_count}")
     print(" · ".join(count_parts))
-    print()
 
-    for i, (score, matched, p) in enumerate(scored, 1):
-        pillars_str = " + ".join(matched[:2])  # limit to 2 pillars for compactness
-        if p.get("_from") == "knowledge":
-            source = p.get("source", "?")
-            ts = p.get("timestamp", "")
-            ts_display = ts[:7] if ts else ""  # YYYY-MM
-            print(f"{i}. {source} · {ts_display} · {pillars_str}")
-        else:
-            author = p.get("author", "?").lstrip("@")
-            likes = p.get("likes", 0)
-            if likes >= 1000:
-                likes_str = f"{likes / 1000:.1f}k♥"
+    # Group items by primary pillar
+    by_pillar: dict[str, list[tuple[int, list[str], dict]]] = {}
+    for entry in scored:
+        _score, matched, _post = entry
+        primary = matched[0] if matched else "General"
+        by_pillar.setdefault(primary, []).append(entry)
+
+    item_num = 0
+    for pillar_name, items in by_pillar.items():
+        print(f"\n{pillar_name}")
+        print("─" * len(pillar_name))
+        for _score, matched, p in items:
+            item_num += 1
+            raw_title = p.get("title")
+            title = raw_title.strip() if raw_title and raw_title != "None" else ""
+            text_body = (p.get("content") or p.get("text") or "").strip()
+
+            # Topic: short headline (from title, or first sentence of content)
+            if title:
+                topic = title
             else:
-                likes_str = f"{likes}♥"
-            print(f"{i}. @{author} · {likes_str} · {pillars_str}")
-        text_body = (p.get("text") or p.get("title") or "").strip()
-        if text_body:
-            print(f"   {text_body[:160]}")
-        if p.get("url"):
-            print(f"   {p['url']}")
-        print()
+                # Use first sentence or first 80 chars as topic
+                first_sent = text_body.split(". ")[0].split(".\n")[0].split("\n\n")[0]
+                topic = first_sent[:80].rstrip(".")
+            print(f"{item_num}. {topic}")
+
+            # Summary: 1-2 sentences describing what the article/post is about
+            # Use text beyond the topic line, up to 200 chars
+            summary = text_body
+            if summary.startswith(topic):
+                summary = summary[len(topic):].lstrip(". \n")
+            if summary:
+                # Take up to ~200 chars, ending at a sentence boundary if possible
+                chunk = summary[:200]
+                dot = chunk.rfind(". ")
+                if dot > 60:
+                    chunk = chunk[:dot + 1]
+                print(f"   {chunk.strip()}")
+
+            # Why: pillar relevance and engagement signal
+            why_parts = []
+            if len(matched) >= 2:
+                why_parts.append(f"Spans {' + '.join(matched)}")
+            elif matched:
+                why_parts.append(f"Matches {matched[0]}")
+            if p.get("likes", 0) >= 100:
+                why_parts.append(f"High engagement ({p['likes']})")
+            if why_parts:
+                print(f"   Why: {' · '.join(why_parts)}")
+
+            # Ref: source attribution with link
+            ref_parts = []
+            if p.get("_from") == "knowledge":
+                ref_parts.append(p.get("source", "?"))
+            else:
+                author = p.get("author", "")
+                if author:
+                    ref_parts.append(author if author.startswith("@") else f"@{author}")
+            if p.get("url"):
+                ref_parts.append(p["url"])
+            if ref_parts:
+                print(f"   Ref: {' — '.join(ref_parts)}")
+            print()
 
 
 if __name__ == "__main__":
