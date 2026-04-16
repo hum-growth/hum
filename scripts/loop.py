@@ -25,7 +25,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -327,20 +326,74 @@ def _load_following(handle: str | None) -> tuple[set[str], str]:
     return followed, "ok"
 
 
-def _draft_replies(posts: list[dict], voice_text: str, outbound_target: str) -> dict[str, str]:
-    """Draft short replies for outbound posts using the OpenAI API.
+def _load_audience() -> str:
+    """Return AUDIENCE.md contents (truncated) for LLM context, or ''."""
+    audience_file = _CFG["data_dir"] / "AUDIENCE.md"
+    if not audience_file.exists():
+        return ""
+    try:
+        return audience_file.read_text(encoding="utf-8")[:1500]
+    except OSError:
+        return ""
 
-    Returns a dict mapping post URL to suggested reply text.
-    Falls back gracefully to empty dict if no API key or on error.
+
+def _load_voice() -> str:
+    """Return VOICE.md contents (truncated) for LLM context, or ''."""
+    voice_file = _CFG["data_dir"] / "VOICE.md"
+    if not voice_file.exists():
+        return ""
+    try:
+        return voice_file.read_text(encoding="utf-8")[:1200]
+    except OSError:
+        return ""
+
+
+def _llm_chat(system: str, user: str) -> str | None:
+    """Run a one-shot LLM turn via openclaw's configured default model.
+
+    Shells out to `openclaw capability model run --prompt ... --json`, which uses
+    whatever provider/model openclaw is configured with (no API key needed in
+    this script's environment). Returns the assistant's text response, or None
+    if the call fails.
     """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = os.environ.get("HUM_REPLY_MODEL", "gpt-4o-mini")
+    prompt = f"{system}\n\n---\n\n{user}"
+    cmd = ["openclaw", "capability", "model", "run", "--prompt", prompt, "--json"]
 
-    if not api_key or not posts:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"[loop] openclaw model run failed ({exc})", file=sys.stderr)
+        return None
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "no stderr"
+        print(f"[loop] openclaw model run exit {proc.returncode}: {stderr}", file=sys.stderr)
+        return None
+
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        print(f"[loop] openclaw model run returned invalid JSON", file=sys.stderr)
+        return None
+
+    if not data.get("ok"):
+        return None
+
+    outputs = data.get("outputs") or []
+    parts = [o.get("text", "") for o in outputs if isinstance(o, dict) and o.get("text")]
+    text = "".join(parts).strip()
+    return text or None
+
+
+def _draft_replies(posts: list[dict], voice_text: str, audience_text: str, outbound_target: str) -> dict[str, str]:
+    """Draft short replies for outbound posts via openclaw's default model.
+
+    Returns a dict mapping post URL to suggested reply text. Returns {} if the
+    LLM call fails.
+    """
+    if not posts:
         return {}
 
-    # Build a single batch prompt for all posts
     post_blocks = []
     for i, p in enumerate(posts, 1):
         author = p.get("author", "")
@@ -348,94 +401,57 @@ def _draft_replies(posts: list[dict], voice_text: str, outbound_target: str) -> 
         url = p.get("url", "")
         post_blocks.append(f"POST {i} by {author}:\n{content}\nURL: {url}")
 
-    posts_text = "\n\n".join(post_blocks)
-
     system_prompt = (
-        "You are a social media engagement assistant. Draft a short reply (1-2 sentences) "
-        "for each post below. Each reply must:\n"
+        "You are drafting outbound replies on X for a finance operator. Each reply must:\n"
         "- Anchor to something specific in the post (a stat, claim, or phrase)\n"
         "- Add value: a data point, contrarian take with reason, or concrete example\n"
         "- Sound human — no filler openers like 'Great point!', 'Love this', 'So true'\n"
         "- Be concise (under 280 characters)\n"
         "- Match this voice:\n\n"
         f"{voice_text[:800]}\n\n"
-        f"Target posts to reply to: {outbound_target}\n\n"
+        f"Audience the user is building for:\n{audience_text[:800]}\n\n"
+        f"Outbound target: {outbound_target}\n\n"
         "Output format — one reply per line, numbered to match:\n"
         "1. [reply text]\n"
         "2. [reply text]\n"
         "...\n"
     )
 
-    try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": posts_text},
-            ],
-            "max_tokens": 600,
-            "temperature": 0.7,
-        }
-
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-
-        raw = data["choices"][0]["message"]["content"].strip()
-
-        # Parse numbered replies
-        replies: dict[str, str] = {}
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # Match "1. reply text" or "1) reply text"
-            m = re.match(r"(\d+)[.)]\s*(.*)", line)
-            if m:
-                idx = int(m.group(1)) - 1
-                if 0 <= idx < len(posts):
-                    post_url = posts[idx].get("url", "")
-                    if post_url:
-                        replies[post_url] = m.group(2).strip()
-
-        print(f"[loop] drafted {len(replies)} replies for outbound posts", file=sys.stderr)
-        return replies
-
-    except Exception as exc:
-        print(f"[loop] reply drafting failed ({exc}) — skipping", file=sys.stderr)
+    raw = _llm_chat(system_prompt, "\n\n".join(post_blocks))
+    if not raw:
         return {}
+
+    replies: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"(\d+)[.)]\s*(.*)", line)
+        if m:
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(posts):
+                post_url = posts[idx].get("url", "")
+                if post_url:
+                    replies[post_url] = m.group(2).strip()
+
+    print(f"[loop] drafted {len(replies)} outbound replies", file=sys.stderr)
+    return replies
 
 
 def _score_follow_candidates(
     candidates: list[dict],
     follow_target: str,
+    audience_text: str,
     cap: int,
 ) -> list[dict]:
-    """Score follow candidates against follow_target using the OpenAI API.
+    """Rank follow candidates against follow_target + audience via openclaw's default model.
 
-    Returns a list of {handle, reason} dicts for the top `cap` candidates.
-    Falls back to first `cap` candidates (no reason) if API unavailable.
+    Returns up to `cap` {handle, reason} dicts. Falls back to the first `cap`
+    candidates (no reason) if the LLM call fails.
     """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = os.environ.get("HUM_REPLY_MODEL", "gpt-4o-mini")
+    if not candidates:
+        return []
 
-    if not api_key or not candidates:
-        return [{"handle": c["handle"], "reason": ""} for c in candidates[:cap]]
-
-    # Build candidate list for the prompt
     cand_lines = []
     for i, c in enumerate(candidates, 1):
         followers = c.get("followers", 0)
@@ -443,73 +459,101 @@ def _score_follow_candidates(
         cand_lines.append(f"{i}. @{c['handle']} ({followers} followers): {sample}")
 
     system_prompt = (
-        "You are evaluating X/Twitter accounts as potential follows.\n\n"
+        "You are evaluating X/Twitter accounts as potential follows for a finance operator.\n\n"
+        f"Audience the user is building for:\n{audience_text[:800]}\n\n"
         f"Follow target: {follow_target}\n\n"
-        f"Select the best {cap} accounts from the list below that match the target. "
+        f"Select the best {cap} accounts from the list below. Reject spam, news bots, "
+        "engagement farmers, and unrelated noise. Prefer real practitioners who match "
+        f"the target above. If fewer than {cap} accounts genuinely qualify, return fewer.\n\n"
         "For each pick, output one line:\n"
-        "handle | one-line reason\n\n"
+        "handle | one-line reason tied to the target/audience\n\n"
         "Output ONLY the selected accounts, nothing else. No numbering."
     )
 
-    try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "\n".join(cand_lines)},
-            ],
-            "max_tokens": 400,
-            "temperature": 0.3,
-        }
-
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-
-        raw = data["choices"][0]["message"]["content"].strip()
-
-        results: list[dict] = []
-        for line in raw.splitlines():
-            line = line.strip().lstrip("0123456789.) ")
-            if "|" in line:
-                handle_part, reason = line.split("|", 1)
-                handle = handle_part.strip().lstrip("@").lower()
-                results.append({"handle": handle, "reason": reason.strip()})
-            elif line:
-                handle = line.strip().lstrip("@").split()[0].lower()
-                results.append({"handle": handle, "reason": ""})
-
-        print(f"[loop] scored {len(results)} follow candidates via LLM", file=sys.stderr)
-        return results[:cap]
-
-    except Exception as exc:
-        print(f"[loop] follow scoring failed ({exc}) — returning first {cap}", file=sys.stderr)
+    raw = _llm_chat(system_prompt, "\n".join(cand_lines))
+    if not raw:
         return [{"handle": c["handle"], "reason": ""} for c in candidates[:cap]]
 
+    results: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip().lstrip("0123456789.) ")
+        if "|" in line:
+            handle_part, reason = line.split("|", 1)
+            handle = handle_part.strip().lstrip("@").lower()
+            results.append({"handle": handle, "reason": reason.strip()})
+        elif line:
+            handle = line.strip().lstrip("@").split()[0].lower()
+            results.append({"handle": handle, "reason": ""})
 
-def _draft_inbound_replies(inbound: list[dict], voice_text: str) -> dict[str, str]:
-    """Draft replies to inbound replies using the OpenAI API.
+    print(f"[loop] scored {len(results)} follow candidates", file=sys.stderr)
+    return results[:cap]
 
-    Returns a dict mapping reply URL to suggested response text.
-    Falls back gracefully to empty dict if no API key or on error.
+
+def _score_outbound_posts(
+    posts: list[dict],
+    outbound_target: str,
+    audience_text: str,
+    cap: int,
+) -> list[dict]:
+    """Rank outbound posts against outbound_target + audience via openclaw's default model.
+
+    Returns up to `cap` posts in ranked order. Falls back to the first `cap`
+    posts unchanged if the LLM call fails.
     """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = os.environ.get("HUM_REPLY_MODEL", "gpt-4o-mini")
+    if not posts:
+        return []
 
-    if not api_key or not inbound:
+    by_url = {p.get("url", ""): p for p in posts if p.get("url")}
+    cand_lines = []
+    for i, p in enumerate(posts, 1):
+        author = p.get("author", "")
+        content = (p.get("content") or "").replace("\n", " ")[:200]
+        likes = p.get("likes") or 0
+        replies = p.get("replies") or 0
+        purl = p.get("url", "")
+        cand_lines.append(f"{i}. {author} ({likes}♥ {replies}↩) {purl}\n   {content}")
+
+    system_prompt = (
+        "You are picking outbound reply candidates on X for a finance operator.\n\n"
+        f"Audience the user is building for:\n{audience_text[:800]}\n\n"
+        f"Outbound target: {outbound_target}\n\n"
+        f"Select the best {cap} posts from the list below. Reject motivational fluff, "
+        "pure news reposts, engagement bait, and posts unrelated to the target/audience. "
+        "Prefer posts making a specific, debatable claim where a thoughtful reply adds value. "
+        f"If fewer than {cap} posts genuinely qualify, return fewer.\n\n"
+        "Output one URL per line, ranked best first. URLs only, no commentary."
+    )
+
+    raw = _llm_chat(system_prompt, "\n\n".join(cand_lines))
+    if not raw:
+        return posts[:cap]
+
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        line = line.strip().lstrip("0123456789.) -")
+        m = re.search(r"https?://\S+", line)
+        if not m:
+            continue
+        picked_url = m.group(0).rstrip(".,);")
+        if picked_url in seen or picked_url not in by_url:
+            continue
+        seen.add(picked_url)
+        picked.append(by_url[picked_url])
+        if len(picked) >= cap:
+            break
+
+    print(f"[loop] scored {len(picked)} outbound candidates", file=sys.stderr)
+    return picked or posts[:cap]
+
+
+def _draft_inbound_replies(inbound: list[dict], voice_text: str, audience_text: str) -> dict[str, str]:
+    """Draft replies to inbound replies via openclaw's default model.
+
+    Returns a dict mapping reply URL to suggested response text. Returns {} if
+    the LLM call fails.
+    """
+    if not inbound:
         return {}
 
     post_blocks = []
@@ -522,67 +566,39 @@ def _draft_inbound_replies(inbound: list[dict], voice_text: str) -> dict[str, st
         )
 
     system_prompt = (
-        "You are drafting responses to replies on your tweets. For each reply, draft a short "
-        "response (1-2 sentences) that:\n"
+        "You are drafting responses to replies on a finance operator's tweets. For each reply, "
+        "draft a short response (1-2 sentences) that:\n"
         "- Engages with the commenter's specific point\n"
         "- Adds value — extends the point, shares an insight, or asks a follow-up\n"
         "- Sounds human — no filler ('Thanks!', 'Great point!')\n"
         "- Is concise (under 280 characters)\n"
         "- Matches this voice:\n\n"
         f"{voice_text[:800]}\n\n"
+        f"Audience the user is building for:\n{audience_text[:800]}\n\n"
         "Output format — one reply per line, numbered to match:\n"
         "1. [reply text]\n"
         "2. [reply text]\n"
     )
 
-    try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "\n\n".join(post_blocks)},
-            ],
-            "max_tokens": 600,
-            "temperature": 0.7,
-        }
-
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            headers=headers,
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-
-        raw = data["choices"][0]["message"]["content"].strip()
-
-        replies: dict[str, str] = {}
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            m = re.match(r"(\d+)[.)]\s*(.*)", line)
-            if m:
-                idx = int(m.group(1)) - 1
-                if 0 <= idx < len(inbound):
-                    reply_url = inbound[idx].get("reply_url", "")
-                    if reply_url:
-                        replies[reply_url] = m.group(2).strip()
-
-        print(f"[loop] drafted {len(replies)} inbound replies", file=sys.stderr)
-        return replies
-
-    except Exception as exc:
-        print(f"[loop] inbound reply drafting failed ({exc}) — skipping", file=sys.stderr)
+    raw = _llm_chat(system_prompt, "\n\n".join(post_blocks))
+    if not raw:
         return {}
+
+    replies: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"(\d+)[.)]\s*(.*)", line)
+        if m:
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(inbound):
+                reply_url = inbound[idx].get("reply_url", "")
+                if reply_url:
+                    replies[reply_url] = m.group(2).strip()
+
+    print(f"[loop] drafted {len(replies)} inbound replies", file=sys.stderr)
+    return replies
 
 
 def run_engage():
@@ -637,28 +653,24 @@ def run_engage():
     self_exclude = {my_handle.lower()} if my_handle else set()
     exclude = tracked_handles | followed | self_exclude
 
-    lines: list[str] = []       # full output — printed to stdout + saved to file
-    tg_lines: list[str] = []   # compact output — sent to Telegram (no agent instructions / CLI commands)
+    audience_text = _load_audience()
+    voice_text = _load_voice()
 
-    _SEP = "─" * 20
+    def _truncate(text: str, n: int) -> str:
+        text = " ".join((text or "").split())
+        return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
-    def _followers_str(c: dict) -> str:
-        f = c.get("followers", 0)
-        if not f:
-            return "? followers"
-        if f >= 1000:
-            return f"{f / 1000:.1f}k followers"
-        return f"{f} followers"
+    lines: list[str] = []
 
     # ── Part 1: Follow candidates ──────────────────────────────────────────
-    lines += ["", "═" * 50, "👥 ACCOUNTS TO FOLLOW", "═" * 50, ""]
+    lines.append(f"👥 Follow — top {follows_cap}")
+    if follow_target:
+        lines.append(f"Target: {_truncate(follow_target, 180)}")
+    lines.append("")
 
     if follows_cap == 0:
-        lines.append("  follows_per_run is 0 — follow step skipped.")
+        lines.append("Skipped (follows_per_run is 0).")
     else:
-        if follow_target:
-            lines += [f"  Target: {follow_target}", ""]
-
         # Passive pool: from today's feeds.json
         feed_pool: dict[str, dict] = {}
         if feeds_file.exists():
@@ -704,114 +716,89 @@ def run_engage():
                 all_candidates.append(c)
 
         if all_candidates:
-            note = f"{len(all_candidates)} candidates found"
-            if filter_status == "ok":
-                note += f" (already-followed accounts filtered out)"
-            else:
-                note += f" (follower filter unavailable: {filter_status})"
-            lines.append(note)
-            lines.append(f"Cap: follow up to {follows_cap} per run.\n")
-            for c in all_candidates:
-                followers_disp = f"{c.get('followers', 0):,} followers" if c.get("followers") else "? followers"
-                lines.append(f"  • @{c['handle']} — {followers_disp}")
-                if c.get("sample"):
-                    lines.append(f"    {c['sample'][:120]}")
-                lines.append(f"    https://x.com/{c['handle']}")
-                lines.append("")
-            lines.append(
-                f"Agent: evaluate each candidate against the follow_target above. "
-                f"Select the best {follows_cap}. Then run:\n"
-                f"  python3 scripts/act/engage.py --platform x --action follow "
-                f"--handles '@handle1,@handle2,...' --account {my_handle or '_jyek'}"
+            scored = _score_follow_candidates(
+                all_candidates, follow_target, audience_text, follows_cap
             )
-
-            # Compact Telegram version — score and show top picks
-            scored = _score_follow_candidates(all_candidates, follow_target, follows_cap)
-            tg_lines += [f"👥 Follow — {len(scored)} recommended from {len(all_candidates)} candidates"]
+            by_handle = {c["handle"]: c for c in all_candidates}
             for i, s in enumerate(scored, 1):
-                reason = f" - {s['reason']}" if s.get("reason") else ""
-                tg_lines.append(f"{i}. https://x.com/{s['handle']}{reason}")
-            tg_lines.append("")
+                base = by_handle.get(s["handle"], {})
+                followers = base.get("followers", 0)
+                if followers >= 1000:
+                    fol = f"{followers / 1000:.1f}k followers"
+                elif followers:
+                    fol = f"{followers} followers"
+                else:
+                    fol = "? followers"
+                reason = s.get("reason") or _truncate(base.get("sample", ""), 120) or "—"
+                lines.append(f"{i}. @{s['handle']} ({fol})")
+                lines.append(f"   {reason}")
+                lines.append(f"   https://x.com/{s['handle']}")
+                lines.append("")
         else:
-            lines.append("  No new follow candidates found.")
-            tg_lines += [f"👥 Follow — no new candidates", ""]
+            lines.append("No new follow candidates.")
+            lines.append("")
 
     # ── Part 2: Outbound reply candidates ─────────────────────────────────
-    lines += ["", "═" * 50, "💬 OUTBOUND REPLY CANDIDATES", "═" * 50, ""]
+    lines.append(f"💬 Outbound — top {outbound_cap}")
+    if outbound_target:
+        lines.append(f"Target: {_truncate(outbound_target, 180)}")
+    lines.append("")
 
     if outbound_cap == 0:
-        lines.append("  outbound_suggestions_per_run is 0 — outbound step skipped.")
+        lines.append("Skipped (outbound_suggestions_per_run is 0).")
+        lines.append("")
     elif not bird_x.is_available():
-        lines.append("  Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
+        lines.append("Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
+        lines.append("")
     else:
-        if outbound_target:
-            lines += [f"  Target: {outbound_target}", ""]
-
         try:
             since_2d = (datetime.now(_tz.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
             print("[loop] fetching home feed for outbound candidates...", file=sys.stderr)
             home_posts = bird_x.fetch_home_feed(since=since_2d, count=80)
 
-            # Minimal filter: skip very short posts and pure retweets
             candidates = [
                 p for p in home_posts
                 if len(p.get("content", "")) >= 60 and not p.get("content", "").startswith("RT @")
             ]
 
             if candidates:
-                lines.append(
-                    f"{len(candidates)} posts from your home feed (last 48h). "
-                    f"Cap: select up to {outbound_cap} to reply to.\n"
+                top_posts = _score_outbound_posts(
+                    candidates, outbound_target, audience_text, outbound_cap
                 )
-
-                # Draft replies for the capped outbound posts
-                tg_posts = candidates[:outbound_cap]
-                voice_file = _CFG["data_dir"] / "VOICE.md"
-                voice_text = ""
-                if voice_file.exists():
-                    try:
-                        voice_text = voice_file.read_text(encoding="utf-8")[:1200]
-                    except OSError:
-                        pass
-                reply_drafts = _draft_replies(tg_posts, voice_text, outbound_target)
-
-                tg_lines += [f"💬 Outbound — {len(tg_posts)} suggestions"]
-                for i, p in enumerate(candidates, 1):
+                reply_drafts = _draft_replies(
+                    top_posts, voice_text, audience_text, outbound_target
+                )
+                for i, p in enumerate(top_posts, 1):
                     author = p.get("author", "")
-                    content = p.get("content", "")
+                    content = _truncate(p.get("content", ""), 180)
                     url = p.get("url", "")
                     likes = p.get("likes") or 0
-                    replies = p.get("replies") or 0
-                    lines.append(f"  {i}. {author} — {likes}♥ {replies}↩")
-                    lines.append(f"     {content[:160]}")
-                    lines.append(f"     {url}")
+                    rcount = p.get("replies") or 0
+                    lines.append(f"{i}. {author} — {likes}♥ {rcount}↩")
+                    lines.append(f"   \"{content}\"")
+                    lines.append(f"   {url}")
+                    draft = reply_drafts.get(url, "")
+                    if draft:
+                        lines.append(f"   Reply: {draft}")
                     lines.append("")
-                    if i <= outbound_cap:
-                        draft = reply_drafts.get(url, "")
-                        reply_part = f" Reply: {draft}" if draft else ""
-                        tg_lines.append(f"{i}. {url}: {content[:120]}.{reply_part}")
-                tg_lines.append("")
-                lines.append(
-                    f"Agent: evaluate each post against the outbound_target above. "
-                    f"Select the best {outbound_cap}, draft a reply, and present for approval before posting."
-                )
             else:
-                lines.append("  No suitable posts found in home feed (last 48h).")
-                tg_lines += [f"💬 Outbound — no suitable posts (last 48h)", ""]
+                lines.append("No suitable posts in home feed (last 48h).")
+                lines.append("")
         except Exception as e:
-            lines.append(f"  Outbound fetch failed: {e}")
-            tg_lines += [f"💬 Outbound — fetch failed: {e}", ""]
+            lines.append(f"Outbound fetch failed: {e}")
+            lines.append("")
             print(f"[loop] outbound error: {e}", file=sys.stderr)
 
     # ── Part 3: Inbound replies ────────────────────────────────────────────
-    lines += ["", "═" * 50, "📥 INBOUND REPLIES", "═" * 50, ""]
+    lines.append("📥 Inbound")
+    lines.append("")
 
     if inbound_cap == 0 and not inbound_no_cap:
-        lines.append("  inbound_suggestions_per_run is 0 — inbound step skipped.")
+        lines.append("Skipped (inbound_suggestions_per_run is 0).")
     elif not my_handle:
-        lines.append("  No X handle configured in CHANNELS.md.")
+        lines.append("No X handle configured in CHANNELS.md.")
     elif not bird_x.is_available():
-        lines.append("  Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
+        lines.append("Bird API unavailable — set credentials in ~/.hum/credentials/x.json.")
     else:
         try:
             print(f"[loop] fetching replies to @{my_handle}...", file=sys.stderr)
@@ -820,55 +807,37 @@ def run_engage():
                 inbound = inbound[:inbound_cap]
 
             if inbound:
-                lines.append(f"{len(inbound)} replies to your recent posts (last 3 days):\n")
-
-                # Draft inbound replies via LLM
-                voice_file = _CFG["data_dir"] / "VOICE.md"
-                inbound_voice = ""
-                if voice_file.exists():
-                    try:
-                        inbound_voice = voice_file.read_text(encoding="utf-8")[:1200]
-                    except OSError:
-                        pass
-                inbound_drafts = _draft_inbound_replies(inbound, inbound_voice)
-
-                tg_lines += [f"📥 Inbound — {len(inbound)} replies"]
+                inbound_drafts = _draft_inbound_replies(inbound, voice_text, audience_text)
                 for i, r in enumerate(inbound, 1):
-                    lines.append(f"  {i}. {r['reply_author']} replied to:")
-                    lines.append(f"     \"{r['original_tweet'][:80]}\"")
-                    lines.append(f"     → {r['reply_text'][:200]}")
-                    lines.append(f"     {r['reply_url']}")
+                    original = _truncate(r.get("original_tweet", ""), 80)
+                    reply = _truncate(r.get("reply_text", ""), 200)
+                    lines.append(f"{i}. {r['reply_author']} on \"{original}\":")
+                    lines.append(f"   \"{reply}\"")
+                    lines.append(f"   {r['reply_url']}")
+                    draft = inbound_drafts.get(r["reply_url"], "")
+                    if draft:
+                        lines.append(f"   Reply: {draft}")
                     lines.append("")
-                    draft = inbound_drafts.get(r['reply_url'], "")
-                    reply_part = f" Reply: {draft}" if draft else ""
-                    tg_lines.append(f"{i}. {r['reply_url']}: {r['reply_text'][:120]}.{reply_part}")
-                tg_lines.append("")
-                lines.append(
-                    "Agent: draft a response to each reply and present for approval before posting."
-                )
             else:
-                lines.append("  No unanswered replies found in the last 3 days.")
-                tg_lines += [f"📥 Inbound — no unanswered replies (last 3 days)", ""]
+                lines.append("No unanswered replies in the last 3 days.")
         except Exception as e:
-            lines.append(f"  Inbound fetch failed: {e}")
-            tg_lines += [f"📥 Inbound — fetch failed: {e}", ""]
+            lines.append(f"Inbound fetch failed: {e}")
             print(f"[loop] inbound error: {e}", file=sys.stderr)
 
-    full_text = "\n".join(lines)
-    tg_text = "\n".join(tg_lines)
+    full_text = "\n".join(lines).rstrip() + "\n"
     print(full_text)
     _save_step_output("engage", full_text)
-    # Store compact version for Telegram delivery
-    _loop_run_dir().joinpath("engage_tg.md").write_text(tg_text, encoding="utf-8")
 
 
 # ── Step 3: Brainstorm ─────────────────────────────────────────────────────
 
 
 def run_brainstorm():
-    """Surface top ideas from feed and ask about topics/posts.
+    """Surface top topic ideas from feed + knowledge.
 
-    Outputs prompts for the agent to present to the user.
+    The brainstorm.py script already produces the desired Telegram-shaped output
+    (grouped by content pillar, scored by cross-pillar resonance + engagement).
+    Save it verbatim as brainstorm.md.
     """
     create_dir = _SCRIPTS_ROOT / "create"
 
@@ -878,27 +847,7 @@ def run_brainstorm():
         allow_fail=True,
     )
 
-    lines = [
-        "",
-        "═" * 50,
-        "💡 CONTENT BRAINSTORM",
-        "═" * 50,
-        "",
-        "Actions for the agent:",
-        "  1. Present the top feed items above as inspiration",
-        "  2. Ask: 'Any topics you want to add to the pipeline?'",
-        "  3. Ask: 'Want to work on any posts today?'",
-        "  4. If yes, run /hum create for the chosen idea",
-    ]
-    text = "\n".join(lines)
-    print(text)
-    full_text = brainstorm_output + text
-    _save_step_output("brainstorm", full_text)
-    # Compact version for Telegram: just the scored items, no agent instructions
-    tg_text = brainstorm_output.strip()
-    if tg_text:
-        tg_file = _loop_run_dir() / "brainstorm_tg.md"
-        tg_file.write_text(tg_text, encoding="utf-8")
+    _save_step_output("brainstorm", brainstorm_output.strip() + "\n")
 
 
 # ── Step 4: Learn (Sundays only) ──────────────────────────────────────────
@@ -958,14 +907,14 @@ def main():
                 _send_to_target(digest_target, digest_file.read_text(), dry_run=args.dry_run)
         elif args.step == "engage":
             run_engage()
-            engage_tg_file = _loop_run_dir() / "engage_tg.md"
-            if engage_target and engage_tg_file.exists():
-                _send_to_target(engage_target, engage_tg_file.read_text(), dry_run=args.dry_run)
+            engage_file = _loop_run_dir() / "engage.md"
+            if engage_target and engage_file.exists():
+                _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
         elif args.step == "brainstorm":
             run_brainstorm()
-            brainstorm_tg_file = _loop_run_dir() / "brainstorm_tg.md"
-            if brainstorm_target and brainstorm_tg_file.exists():
-                _send_to_target(brainstorm_target, brainstorm_tg_file.read_text(), dry_run=args.dry_run)
+            brainstorm_file = _loop_run_dir() / "brainstorm.md"
+            if brainstorm_target and brainstorm_file.exists():
+                _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
         elif args.step == "learn":
             run_learn()
         return
@@ -1003,9 +952,9 @@ def main():
     try:
         run_engage()
         steps["engage"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
-        engage_tg_file = _loop_run_dir() / "engage_tg.md"
-        if engage_target and engage_tg_file.exists():
-            _send_to_target(engage_target, engage_tg_file.read_text(), dry_run=args.dry_run)
+        engage_file = _loop_run_dir() / "engage.md"
+        if engage_target and engage_file.exists():
+            _send_to_target(engage_target, engage_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] engage failed: {exc}"
         print(msg, file=sys.stderr)
@@ -1017,9 +966,9 @@ def main():
     try:
         run_brainstorm()
         steps["brainstorm"] = {"status": "ok", "duration_s": round(time.time() - t0, 1)}
-        brainstorm_tg_file = _loop_run_dir() / "brainstorm_tg.md"
-        if brainstorm_target and brainstorm_tg_file.exists():
-            _send_to_target(brainstorm_target, brainstorm_tg_file.read_text(), dry_run=args.dry_run)
+        brainstorm_file = _loop_run_dir() / "brainstorm.md"
+        if brainstorm_target and brainstorm_file.exists():
+            _send_to_target(brainstorm_target, brainstorm_file.read_text(), dry_run=args.dry_run)
     except Exception as exc:
         msg = f"[loop] brainstorm failed: {exc}"
         print(msg, file=sys.stderr)
