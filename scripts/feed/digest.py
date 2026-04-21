@@ -16,11 +16,14 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.utils import STOPWORDS, parse_likes
+from feed.blocklist import load_blocklist, is_blocked
 _CFG = load_config()
 SEEN_HISTORY_FILE = str(_CFG["feed_assets"] / "seen_history.json")
 
 MAX_TEXT_LEN = 200
 SEEN_EXPIRY_DAYS = 7  # Forget seen items after this many days
+FINGERPRINT_OVERLAP_MIN = 4  # Min shared keywords to treat two stories as duplicates
+MAX_POSTS_PER_AUTHOR = 2  # Cap per-author posts within a single digest
 
 
 def truncate(text, n=MAX_TEXT_LEN):
@@ -83,16 +86,14 @@ def is_seen(post: dict, history: dict) -> bool:
     url = post.get("url", "")
     if url and url in history:
         return True
-    # Story-level fingerprint check: require strong overlap (7+ words) to avoid
-    # flagging legitimately different stories that share a few common words
     fp = make_story_fingerprint(post.get("content", "") or post.get("title", ""))
     fp_words = set(fp.split())
-    if len(fp_words) >= 4:
+    if len(fp_words) >= FINGERPRINT_OVERLAP_MIN:
+        threshold = min(FINGERPRINT_OVERLAP_MIN, len(fp_words) - 1)
         for key in history:
             if key.startswith("fp:"):
                 seen_words = set(key[3:].split())
-                overlap = fp_words & seen_words
-                if len(overlap) >= min(7, len(fp_words) - 1):
+                if len(fp_words & seen_words) >= threshold:
                     return True
     return False
 
@@ -113,10 +114,13 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
         return None
 
     history = load_seen_history()
+    blocklist = load_blocklist()
 
-    # Filter out previously seen posts/stories
-    fresh_posts = [p for p in posts if not is_seen(p, history)]
-    skipped = len(posts) - len(fresh_posts)
+    # Drop blocked authors and previously-seen stories up front
+    fresh_posts = [
+        p for p in posts
+        if not is_blocked(p.get("author", ""), blocklist) and not is_seen(p, history)
+    ]
 
     fresh_posts.sort(key=post_sort_key, reverse=True)
 
@@ -124,20 +128,25 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
     topic_priority = ["ai_monetize", "AI", "startup", "crypto"]
     by_topic = {"ai_monetize": [], "AI": [], "startup": [], "crypto": []}
     seen_urls = set()
+    author_counts: dict[str, int] = {}
 
     for p in fresh_posts:
         url = p.get("url", "")
         if url in seen_urls:
+            continue
+        author = p.get("author", "") or ""
+        if author_counts.get(author, 0) >= MAX_POSTS_PER_AUTHOR:
             continue
         topics = p.get("topics", [])
         for t in topic_priority:
             if t in topics and len(by_topic[t]) < max_posts // 3 + 1:
                 by_topic[t].append(p)
                 seen_urls.add(url)
+                author_counts[author] = author_counts.get(author, 0) + 1
                 break
 
-    today = datetime.now().strftime("%a %d %b")
-    lines = [f"🗞 *Morning Feed — {today}*\n"]
+    today = datetime.now().strftime("%a %d %b %Y")
+    lines = [f"**🗞 Hum Digest — {today}**", ""]
 
     counter = 1
     digest_map = {}
@@ -148,7 +157,9 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
         items = by_topic.get(topic, [])
         if not items:
             continue
-        lines.append(f"\n*{label}*")
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(f"**{label}**")
         for p in items[:3]:
             author = p.get("author", "")
             url = p.get("url", "")
@@ -172,8 +183,18 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
     # Fallback: show untagged posts if topic sections are empty
     untagged = [p for p in fresh_posts if p.get("url", "") not in seen_urls]
     if untagged:
-        lines.append(f"\n*📌 General*")
-        for p in untagged[:6]:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append("**📌 General**")
+        shown = 0
+        for p in untagged:
+            if shown >= 6:
+                break
+            author_key = p.get("author", "") or ""
+            if author_counts.get(author_key, 0) >= MAX_POSTS_PER_AUTHOR:
+                continue
+            author_counts[author_key] = author_counts.get(author_key, 0) + 1
+            shown += 1
             author = p.get("author", "") or p.get("channel_name", "")
             url = p.get("url", "")
             if p.get("source") == "youtube":
@@ -190,9 +211,6 @@ def format_digest(posts: list[dict], max_posts: int) -> str:
             counter += 1
             mark_seen(p, history)
             seen_urls.add(p.get("url", ""))
-
-    if skipped > 0:
-        lines.append(f"\n_(Filtered {skipped} repeated/similar post{'s' if skipped != 1 else ''} from prior feeds)_")
 
     # Save updated seen history
     save_seen_history(history)

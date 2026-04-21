@@ -27,6 +27,7 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from act.connectors import load as load_connector
+from feed import blocklist as _blocklist
 
 
 # ── Follow ──────────────────────────────────────────────────────────────────
@@ -47,6 +48,18 @@ def parse_handles_from_file(path: str) -> list[tuple[str, str]]:
     return handles
 
 
+def filter_blocked(handles: list[str]) -> tuple[list[str], list[str]]:
+    """Split handles into (allowed, blocked) using the shared blocklist."""
+    bl = _blocklist.load_blocklist()
+    allowed, blocked = [], []
+    for h in handles:
+        if _blocklist.is_blocked(h, bl):
+            blocked.append(h)
+        else:
+            allowed.append(h)
+    return allowed, blocked
+
+
 def follow_accounts(
     platform: str,
     handles: list[str],
@@ -54,10 +67,15 @@ def follow_accounts(
 ) -> list[dict[str, Any]]:
     """Follow a list of accounts on the given platform.
 
-    Returns list of results, one per handle.
+    Handles on the shared blocklist are skipped with status=blocked.
+    Returns list of results, one per input handle.
     """
+    handles, blocked = filter_blocked(handles)
     connector = load_connector(platform)
-    results = []
+    results = [
+        {"handle": h, "status": "blocked", "message": "on shared blocklist — skipped"}
+        for h in blocked
+    ]
     for handle in handles:
         try:
             result = connector.follow(handle, account)
@@ -110,9 +128,13 @@ def gather_insights(
 
 def main():
     parser = argparse.ArgumentParser(description="Platform engagement actions")
-    parser.add_argument("--platform", required=True, choices=["x", "linkedin"])
-    parser.add_argument("--account", required=True, help="Account key from credentials")
-    parser.add_argument("--action", required=True, choices=["follow", "comment", "insights"])
+    parser.add_argument("--platform", required=False, choices=["x", "linkedin"])
+    parser.add_argument("--account", required=False, help="Account key from credentials")
+    parser.add_argument(
+        "--action",
+        required=True,
+        choices=["follow", "comment", "insights", "block", "unblock", "list-blocked"],
+    )
 
     # Follow args
     parser.add_argument("--handles", help="Comma-separated handles (for follow)")
@@ -125,6 +147,31 @@ def main():
     args = parser.parse_args()
 
     try:
+        if args.action == "list-blocked":
+            data = _blocklist.load_blocklist()
+            for a in data.get("authors", []):
+                print(a)
+            return
+
+        if args.action in ("block", "unblock"):
+            if not args.handles:
+                parser.error(f"--handles required for {args.action}")
+            for raw in args.handles.split(","):
+                h = raw.strip()
+                if not h:
+                    continue
+                if args.action == "block":
+                    added, _ = _blocklist.add(h)
+                    print(f"{'blocked' if added else 'already-blocked'}: {h}")
+                else:
+                    removed, _ = _blocklist.remove(h)
+                    print(f"{'unblocked' if removed else 'not-on-list'}: {h}")
+            return
+
+        if args.action in ("follow", "comment", "insights"):
+            if not args.platform or not args.account:
+                parser.error(f"--platform and --account required for {args.action}")
+
         if args.action == "follow":
             if args.handles_file:
                 parsed = parse_handles_from_file(args.handles_file)

@@ -15,10 +15,11 @@ from .common import (
 )
 
 
-def fetch_sitemap_urls(sitemap_url: str) -> list:
-    """Fetch and parse a sitemap XML, return flat list of article URLs.
+def fetch_sitemap_urls(sitemap_url: str) -> list[tuple[str, str]]:
+    """Fetch and parse a sitemap XML, return list of (url, lastmod) tuples.
 
-    Handles both regular sitemaps and sitemap indexes (recurses).
+    lastmod is an empty string when absent. Handles both regular sitemaps and
+    sitemap indexes (recurses one level).
     """
     try:
         r = requests.get(sitemap_url, headers=HEADERS, timeout=30)
@@ -27,16 +28,18 @@ def fetch_sitemap_urls(sitemap_url: str) -> list:
             return []
         root = ET.fromstring(r.content)
         ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        urls = []
+        entries: list[tuple[str, str]] = []
         for url_el in root.findall("sm:url", ns):
             loc = url_el.find("sm:loc", ns)
+            lastmod_el = url_el.find("sm:lastmod", ns)
             if loc is not None and loc.text:
-                urls.append(loc.text.strip())
+                lastmod = lastmod_el.text.strip() if lastmod_el is not None and lastmod_el.text else ""
+                entries.append((loc.text.strip(), lastmod))
         for sitemap_el in root.findall("sm:sitemap", ns):
             loc = sitemap_el.find("sm:loc", ns)
             if loc is not None and loc.text:
-                urls.extend(fetch_sitemap_urls(loc.text.strip()))
-        return urls
+                entries.extend(fetch_sitemap_urls(loc.text.strip()))
+        return entries
     except Exception as e:
         print(f"    ! sitemap parse error: {e}")
         return []
@@ -56,11 +59,22 @@ def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
         print(f"   {len(already)} articles already saved -- skipping those")
 
     print(f"   fetching sitemap: {sitemap_url}")
-    urls = fetch_sitemap_urls(sitemap_url)
-    if not urls:
+    entries = fetch_sitemap_urls(sitemap_url)
+    if not entries:
         print(f"   ! no URLs found in sitemap")
         return 0
 
+    # Sort newest-first; without lastmod, preserve original order at the end.
+    entries.sort(key=lambda e: e[1], reverse=True)
+
+    # In normal (non-backfill) runs, only inspect the newest window of entries.
+    # This ensures daily crawls always pick up recent content and never burn the
+    # per-run cap on old backlog articles.
+    if max_articles:
+        window = max(max_articles * 3, 30)
+        entries = entries[:window]
+
+    urls = [url for url, _ in entries]
     print(f"   {len(urls)} URLs in sitemap")
 
     saved = 0

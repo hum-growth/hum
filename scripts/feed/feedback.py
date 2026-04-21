@@ -17,10 +17,13 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.utils import STOPWORDS
+from feed import blocklist as _blocklist
 _CFG = load_config()
 ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 LOG_FILE = os.path.join(ASSETS_DIR, "feedback_log.json")
+
+VALID_SOURCES = ("hn", "x", "x_feed", "knowledge", "youtube")
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -136,8 +139,20 @@ def log_vote(item_num: int, vote: str):
         print(f"   Topic weights: { {t: round(prefs['topics'].get(t,1.0),2) for t in topics} }")
 
 def show_prefs():
-    prefs = load_json(PREFS_FILE, {"authors": {}, "topics": {}, "keywords": {}})
+    prefs = load_json(PREFS_FILE, {"authors": {}, "topics": {}, "keywords": {}, "sources": {}})
     print("=== Current Preferences ===\n")
+    sources = prefs.get("sources", {})
+    if sources:
+        print("SOURCE WEIGHTS:")
+        for k, v in sorted(sources.items()):
+            print(f"  {k:<12} {v:.2f}")
+        print()
+    blocked = _blocklist.load_blocklist().get("authors", [])
+    if blocked:
+        print(f"BLOCKED AUTHORS ({len(blocked)}):")
+        for a in blocked:
+            print(f"  {a}")
+        print()
     print("AUTHORS:")
     for k, v in sorted(prefs["authors"].items(), key=lambda x: -x[1]):
         bar = "▓" * int(v * 5)
@@ -153,6 +168,47 @@ def show_prefs():
     suppressed = {k: v for k, v in prefs["keywords"].items() if v < 1.0}
     for k, v in sorted(suppressed.items(), key=lambda x: x[1])[:10]:
         print(f"  {k:<20} {v:.2f}")
+
+def block_author(handle: str):
+    added, data = _blocklist.add(handle)
+    if added:
+        print(f"✅ Blocked {handle}. Blocklist now has {len(data['authors'])} entries.")
+    else:
+        print(f"(already blocked) {handle}")
+
+
+def unblock_author(handle: str):
+    removed, data = _blocklist.remove(handle)
+    if removed:
+        print(f"✅ Unblocked {handle}. Blocklist now has {len(data['authors'])} entries.")
+    else:
+        print(f"(not on blocklist) {handle}")
+
+
+def show_blocklist():
+    data = _blocklist.load_blocklist()
+    authors = data.get("authors", [])
+    if not authors:
+        print("Blocklist is empty.")
+        return
+    print(f"=== Blocked Authors ({len(authors)}) ===")
+    for a in authors:
+        print(f"  {a}")
+
+
+def set_source_weight(source: str, weight: float):
+    if source not in VALID_SOURCES:
+        print(f"ERROR: source must be one of {VALID_SOURCES}", file=sys.stderr)
+        sys.exit(1)
+    if weight < 0:
+        print("ERROR: weight must be >= 0", file=sys.stderr)
+        sys.exit(1)
+    prefs = load_json(PREFS_FILE, {"authors": {}, "topics": {}, "keywords": {}, "sources": {}})
+    prefs.setdefault("sources", {})[source] = weight
+    save_json(PREFS_FILE, prefs)
+    print(f"✅ Set source weight: {source} = {weight}")
+    print(f"   Current source weights: {prefs['sources']}")
+
 
 def show_history():
     log = load_json(LOG_FILE, [])
@@ -175,6 +231,18 @@ def main():
     subparsers.add_parser("show")
     subparsers.add_parser("history")
 
+    block_p = subparsers.add_parser("block", help="Block an author from the digest")
+    block_p.add_argument("handle")
+
+    unblock_p = subparsers.add_parser("unblock", help="Unblock an author")
+    unblock_p.add_argument("handle")
+
+    subparsers.add_parser("blocklist", help="Show blocked authors")
+
+    source_p = subparsers.add_parser("source", help="Set source weight (e.g. hn 0.3)")
+    source_p.add_argument("source", choices=list(VALID_SOURCES))
+    source_p.add_argument("weight", type=float)
+
     args = parser.parse_args()
 
     if args.cmd == "log":
@@ -183,6 +251,14 @@ def main():
         show_prefs()
     elif args.cmd == "history":
         show_history()
+    elif args.cmd == "block":
+        block_author(args.handle)
+    elif args.cmd == "unblock":
+        unblock_author(args.handle)
+    elif args.cmd == "blocklist":
+        show_blocklist()
+    elif args.cmd == "source":
+        set_source_weight(args.source, args.weight)
     else:
         parser.print_help()
 

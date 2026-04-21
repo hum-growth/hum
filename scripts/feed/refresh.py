@@ -107,15 +107,13 @@ def _expand_threads(items: list[dict]) -> list[dict]:
     return expanded
 
 
-def refresh_x_feed(count: int = 100) -> list[dict]:
+def refresh_x_feed(sources: dict, count: int = 100) -> list[dict]:
     """Fetch X home feed via Bird (filter:follows) and merge into feeds.json.
 
     Uses the single 'x_feed' entry in sources.json (if present) for incremental
     last_crawled tracking. Returns the list of fetched items for reporting.
     """
     feeds_path = Path(_CFG["feeds_file"])
-    sources_file = _CFG["sources_file"]
-    sources = load_sources(sources_file)
     feed_entries = get_by_type(sources, "x_feed")
     since = feed_entries[0].get("last_crawled") if feed_entries else None
     since_note = f" (since {since})" if since else " (first crawl)"
@@ -129,7 +127,6 @@ def refresh_x_feed(count: int = 100) -> list[dict]:
     items = _expand_threads(items)
     _merge_into_feeds(feeds_path, items)
     update_last_crawled(sources, "x_feed", "", _now_iso())
-    save_sources(sources_file, sources)
     return items
 
 
@@ -263,7 +260,7 @@ def main():
 
     # x_feed — Bird filter:follows, direct fetch + merge
     if args.type in ("x_feed", "all"):
-        items = refresh_x_feed()
+        items = refresh_x_feed(sources)
         results["x_feed"] = items
         if args.type == "x_feed":
             print(f"[refresh] x_feed: {len(items)} tweets merged", file=sys.stderr)

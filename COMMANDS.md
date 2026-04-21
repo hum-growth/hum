@@ -733,6 +733,7 @@ Use `follow_target` and `outbound_target` as your evaluation criteria when revie
 For each channel in CHANNELS.md (in order):
 - If `follows_per_run` is 0, skip this channel entirely.
 - The engage script surfaces a broad candidate pool from today's `feeds.json` and Bird API topic search, filtered against already-followed accounts.
+- Before suggesting follows, it refreshes your live X following list. If that refresh fails, it skips follow suggestions rather than risk recommending accounts you already follow.
 - Evaluate candidates against the `follow_target` criteria and select up to `follows_per_run` best matches.
 - Run the follow action:
   ```bash
@@ -744,6 +745,19 @@ For each channel in CHANNELS.md (in order):
 - Match the `follow_target` description in CHANNELS.md
 - Post regularly (active in last 7 days)
 - Are not already followed
+- Are not on the shared blocklist (`python3 -m act.engage --action list-blocked`)
+
+**Handling downvotes on a suggested follower:**
+
+When the user rejects a suggestion ("not this one", "downvote 2", "block @handle"), add the handle to the shared blocklist so it stops being surfaced in both follow suggestions and the daily digest:
+
+```bash
+python3 -m act.engage --action block --handles '@handle1,@handle2'
+# or equivalently:
+python3 scripts/feed/feedback.py block @handle1
+```
+
+`follow_accounts()` silently skips blocked handles even if they sneak back into the candidate pool — skipped entries come back with `status: blocked` in the result.
 
 ---
 
@@ -901,16 +915,34 @@ Collects real writing samples from the user's social media profiles into `<data_
 ## /hum feedback
 
 **What it does:**
-Log upvote/downvote on digest items and update feed preferences.
+Log upvote/downvote on digest items, block authors outright, and tune source-level weights. All three signals are read by the ranker when scoring future feed items.
 
 ```bash
 python3 scripts/feed/feedback.py log --item 3 --vote up
 python3 scripts/feed/feedback.py log --item 1 --vote down
-python3 scripts/feed/feedback.py show     # show current preferences
-python3 scripts/feed/feedback.py history   # show recent votes
+python3 scripts/feed/feedback.py show        # preferences + source weights + blocklist
+python3 scripts/feed/feedback.py history     # recent votes
+
+# Hard-ban an author (stronger than downvote — drops them from every digest)
+python3 scripts/feed/feedback.py block @garrytan
+python3 scripts/feed/feedback.py unblock @garrytan
+python3 scripts/feed/feedback.py blocklist
+
+# Re-weight a source (defaults: hn=0.5, x/x_feed=1.0, knowledge=1.2, youtube=1.0)
+python3 scripts/feed/feedback.py source hn 0.3       # de-emphasize Hacker News
+python3 scripts/feed/feedback.py source knowledge 1.5
 ```
 
-Preferences are stored in `feed/assets/preferences.json` and used by the ranker to score future feed items.
+Files stored under `<data_dir>/feed/assets/`:
+- `preferences.json` — `{authors, topics, keywords, sources}` weight maps
+- `blocklist.json` — `{"authors": ["@handle", ...]}`, case-insensitive, `@`-tolerant
+
+The blocklist is **shared** between the digest ranker and `/hum engage` follow suggestions — blocking an author hides them from both. Votes only nudge the weighting (floor 0.3); block gives a hard zero.
+
+### Digest grouping rules
+
+- Per-author cap: no single author contributes more than **2 items** to one digest.
+- Story dedup: a post is treated as already-seen if its fingerprint shares ≥ 4 meaningful words with a post shown in the last 7 days.
 
 ---
 

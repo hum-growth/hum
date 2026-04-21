@@ -14,6 +14,19 @@ from .common import (
 )
 
 
+def _entry_date(entry) -> str:
+    """Return a sortable ISO-ish date string for an RSS entry, or '' if absent."""
+    for field in ("published_parsed", "updated_parsed"):
+        t = entry.get(field)
+        if t:
+            try:
+                import time as _time
+                return _time.strftime("%Y-%m-%dT%H:%M:%S", t)
+            except Exception:
+                pass
+    return ""
+
+
 def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
     key = source["key"]
     name = source["name"]
@@ -28,10 +41,17 @@ def crawl(source: dict, max_articles: int = 0, recrawl: bool = False) -> int:
         print(f"   {len(already)} articles already saved -- skipping those")
 
     feed = feedparser.parse(feed_url)
-    entries = feed.entries
+    entries = list(feed.entries)
     if not entries:
         print(f"   ! could not fetch RSS: {feed_url}")
         return 0
+
+    # Sort newest-first and, in normal runs, cap to a recent window so daily
+    # crawls always pick up recent content rather than old unsaved backlog.
+    entries.sort(key=_entry_date, reverse=True)
+    if max_articles:
+        window = max(max_articles * 3, 30)
+        entries = entries[:window]
 
     print(f"   {len(entries)} entries in feed")
 
