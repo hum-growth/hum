@@ -627,6 +627,7 @@ def run_engage():
     outbound_target: str = x_cfg.get("outbound_target", "")
     inbound_cap: int | None = x_cfg.get("inbound_suggestions_per_run", None)
     inbound_no_cap: bool = x_cfg.get("inbound_no_cap", True)
+    inbound_target: str = x_cfg.get("inbound_target", "")
 
     feeds_file = Path(_CFG["feeds_file"])
     sources_file = Path(_CFG["sources_file"])
@@ -660,16 +661,31 @@ def run_engage():
         text = " ".join((text or "").split())
         return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
+    today = datetime.now().strftime("%a %d %b %Y")
     lines: list[str] = []
 
     # ── Part 1: Follow candidates ──────────────────────────────────────────
-    lines.append(f"👥 Follow — top {follows_cap}")
+    lines.append(f"**👥 Hum Follow — {today}**")
     if follow_target:
         lines.append(f"Target: {_truncate(follow_target, 180)}")
+    lines.append(f"Top {follows_cap}")
     lines.append("")
 
     if follows_cap == 0:
         lines.append("Skipped (follows_per_run is 0).")
+    elif filter_status != "ok":
+        follow_error_map = {
+            "no-handle": "no X handle is configured",
+            "no-creds": "X credentials are missing or incomplete",
+            "fetch-failed": "the live X following-list refresh failed",
+        }
+        follow_error = follow_error_map.get(filter_status, f"unknown error: {filter_status}")
+        lines.append(
+            "Skipped follow suggestions because "
+            f"{follow_error}. This avoids recommending accounts you may already follow."
+        )
+        lines.append(f"Error: {filter_status}")
+        lines.append("")
     else:
         # Passive pool: from today's feeds.json
         feed_pool: dict[str, dict] = {}
@@ -739,9 +755,10 @@ def run_engage():
             lines.append("")
 
     # ── Part 2: Outbound reply candidates ─────────────────────────────────
-    lines.append(f"💬 Outbound — top {outbound_cap}")
+    lines.append(f"**💬 Hum Outbound — {today}**")
     if outbound_target:
         lines.append(f"Target: {_truncate(outbound_target, 180)}")
+    lines.append(f"Top {outbound_cap}")
     lines.append("")
 
     if outbound_cap == 0:
@@ -790,7 +807,9 @@ def run_engage():
             print(f"[loop] outbound error: {e}", file=sys.stderr)
 
     # ── Part 3: Inbound replies ────────────────────────────────────────────
-    lines.append("📥 Inbound")
+    lines.append(f"**📥 Hum Inbound — {today}**")
+    if inbound_target:
+        lines.append(f"Target: {_truncate(inbound_target, 180)}")
     lines.append("")
 
     if inbound_cap == 0 and not inbound_no_cap:

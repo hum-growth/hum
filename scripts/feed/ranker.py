@@ -16,10 +16,13 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
 from feed.utils import STOPWORDS, parse_likes
+from feed.blocklist import load_blocklist, is_blocked
 _CFG = load_config()
 ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 FEED_SOURCE_CONFIG_FILE = str(_CFG["feed_dir"] / "feed_source_config.json")
+
+DEFAULT_SOURCE_WEIGHTS = {"hn": 0.5, "x": 1.0, "x_feed": 1.0, "knowledge": 1.2, "youtube": 1.0}
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -44,7 +47,7 @@ def _prefer_longform_for_post(post: dict, feed_config: dict) -> bool:
     return False
 
 
-def score_post(post: dict, prefs: dict, feed_config: dict | None = None) -> float:
+def score_post(post: dict, prefs: dict, feed_config: dict | None = None, blocklist: dict | None = None) -> float:
     author = post.get("author", "")
     topics = post.get("topics", [])
     text = post.get("content", "") or post.get("title", "")
@@ -52,8 +55,17 @@ def score_post(post: dict, prefs: dict, feed_config: dict | None = None) -> floa
     if post.get("source") == "youtube":
         likes = int(post.get("views", likes) or likes)
 
+    # Blocked authors get zero — they'll be dropped by downstream filters
+    if blocklist is not None and is_blocked(author, blocklist):
+        return 0.0
+
     # Base score: log scale of likes
     base = math.log(likes + 2)
+
+    # Source weight (user-configurable in preferences.json → "sources")
+    source = post.get("source", "") or ""
+    source_weights = {**DEFAULT_SOURCE_WEIGHTS, **prefs.get("sources", {})}
+    source_w = source_weights.get(source, 1.0)
 
     # Author weight (default 1.0)
     author_w = prefs["authors"].get(author, 1.0)
@@ -67,7 +79,7 @@ def score_post(post: dict, prefs: dict, feed_config: dict | None = None) -> floa
     kw_scores = [prefs["keywords"].get(kw, 1.0) for kw in keywords]
     kw_w = sum(kw_scores) / len(kw_scores) if kw_scores else 1.0
 
-    score = base * author_w * topic_w * kw_w
+    score = base * source_w * author_w * topic_w * kw_w
 
     # Article/thread preference: boost long-form, penalise short tweets
     if feed_config and _prefer_longform_for_post(post, feed_config):
@@ -109,15 +121,16 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    prefs = load_json(PREFS_FILE, {"authors": {}, "topics": {}, "keywords": {}})
+    prefs = load_json(PREFS_FILE, {"authors": {}, "topics": {}, "keywords": {}, "sources": {}})
     feed_config = load_json(FEED_SOURCE_CONFIG_FILE, {})
+    blocklist = load_blocklist()
 
     with open(args.input) as f:
         posts = json.load(f)
 
     scored = []
     for post in posts:
-        s = score_post(post, prefs, feed_config)
+        s = score_post(post, prefs, feed_config, blocklist)
         post["_score"] = round(s, 3)
         scored.append(post)
 

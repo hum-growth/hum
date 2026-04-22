@@ -270,15 +270,26 @@ def load_channel_config(platform: str, data_dir: Path | None = None) -> dict:
         int(inbound_m.group(1)) if inbound_m else (None if inbound_no_cap else 0)
     )
 
+    default_follow_target = "Find relevant accounts worth following in the user's niche, prioritizing real practitioners and excluding spam, bots, and already-followed accounts."
+    default_outbound_target = "Find recent posts worth replying to where the user can add a thoughtful, specific point and build visibility with the right audience."
+    default_inbound_target = "Reply thoughtfully to inbound responses that deserve engagement, add value, and strengthen the conversation."
+
+    inbound_target = (
+        raw_fields.get("inbound_target", "")
+        or raw_fields.get("inbound_suggestions_per_run", "")
+        or default_inbound_target
+    )
+
     return {
         "platform": platform,
         "handle": handle,
         "follows_per_run": follows_count,
-        "follow_target": raw_fields.get("follow_target", ""),
+        "follow_target": raw_fields.get("follow_target", "") or default_follow_target,
         "outbound_suggestions_per_run": outbound_count,
-        "outbound_target": raw_fields.get("outbound_target", ""),
+        "outbound_target": raw_fields.get("outbound_target", "") or default_outbound_target,
         "inbound_suggestions_per_run": inbound_count,
         "inbound_no_cap": inbound_no_cap,
+        "inbound_target": inbound_target,
         "raw": raw_fields,
     }
 

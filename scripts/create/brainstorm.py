@@ -44,21 +44,19 @@ def load_weights() -> dict:
         with open(path) as f:
             saved = json.load(f)
         merged = {**DEFAULT_WEIGHTS, **saved}
-        # Backfill any new default keys
         if merged != saved:
             path.write_text(json.dumps(merged, indent=2) + "\n")
         return merged
-    # First run — create with defaults
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(DEFAULT_WEIGHTS, indent=2) + "\n")
     return dict(DEFAULT_WEIGHTS)
 
 
 def score_post(post: dict, pillars: dict[str, list[str]], weights: dict) -> tuple[int, list[str]]:
-    """Score a post against all pillars. Returns (score, matched_pillar_names)."""
+    """Score a post. Returns (score, [matchedPillarNames])."""
     text = (post.get("content") or post.get("text") or post.get("title") or "").lower()
     kw_weight = weights["keyword_weight"]
-    matched_pillars = []
+    matched_pillars: list[str] = []
     total_hits = 0
 
     for pillar_name, keywords in pillars.items():
@@ -81,11 +79,7 @@ def score_post(post: dict, pillars: dict[str, list[str]], weights: dict) -> tupl
 
 
 def load_knowledge_items(knowledge_dir: Path, days_back: int = 30) -> list[dict]:
-    """Load knowledge/ markdown articles published within days_back days.
-
-    Files follow the naming convention YYYY-MM-DD-slug.md so we can pre-filter
-    by filename before reading any file content.
-    """
+    """Load knowledge/ markdown articles published within days_back days."""
     if not knowledge_dir.exists():
         return []
 
@@ -93,8 +87,7 @@ def load_knowledge_items(knowledge_dir: Path, days_back: int = 30) -> list[dict]
     items = []
 
     for md_file in knowledge_dir.rglob("*.md"):
-        # Pre-filter: filename must start with a valid date
-        name = md_file.stem  # e.g. "2026-04-01-some-post"
+        name = md_file.stem
         date_prefix = name[:10]
         try:
             file_date = date.fromisoformat(date_prefix)
@@ -103,7 +96,6 @@ def load_knowledge_items(knowledge_dir: Path, days_back: int = 30) -> list[dict]
         if file_date < cutoff:
             continue
 
-        # Parse frontmatter and body
         try:
             raw = md_file.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -111,11 +103,11 @@ def load_knowledge_items(knowledge_dir: Path, days_back: int = 30) -> list[dict]
 
         title = ""
         url = ""
-        source = md_file.parent.name  # folder name = author/source slug
+        source = md_file.parent.name
         author = source
         fm_done = False
-        body_lines: list[str] = []
         in_fm = False
+        body_lines: list[str] = []
 
         for line in raw.splitlines():
             if not fm_done:
@@ -155,6 +147,68 @@ def load_knowledge_items(knowledge_dir: Path, days_back: int = 30) -> list[dict]
     return items
 
 
+def build_brainstorm_items(
+    all_posts: list[dict],
+    pillars: dict[str, list[str]],
+    weights: dict,
+    max_per_pillar: int = 3,
+) -> list[tuple]:
+    """
+    Rank and balance posts across all pillars.
+    Returns sorted list of (score, topic, summary, pillar, ref, likes, matched_pillars).
+    """
+    scored = []
+    for p in all_posts:
+        s, matched = score_post(p, pillars, weights)
+        if s > 0:
+            scored.append((s, matched, p))
+
+    scored.sort(key=lambda x: -x[0])
+
+    # Balance: cap per pillar so no single pillar dominates
+    by_pillar: dict[str, list[tuple]] = {}
+    for entry in scored:
+        _score, matched, p = entry
+        primary = matched[0] if matched else "General"
+        if len(by_pillar.get(primary, [])) < max_per_pillar:
+            by_pillar.setdefault(primary, []).append(entry)
+
+    merged = []
+    for entries in by_pillar.values():
+        merged.extend(entries)
+    merged.sort(key=lambda x: -x[0])
+
+    items = []
+    for _score, matched, p in merged:
+        primary = matched[0] if matched else "General"
+
+        title = (p.get("title") or "").strip()
+        text_body = (p.get("content") or p.get("text") or "").strip()
+        if title and title != "None":
+            topic = title
+        else:
+            first_sent = text_body.split(". ")[0].split(".\n")[0].split("\n\n")[0]
+            topic = first_sent[:80].rstrip(".")
+
+        summary = text_body
+        if summary.startswith(topic):
+            summary = summary[len(topic):].lstrip(". \n")
+        summary = " ".join(summary.split())
+        chunk = summary[:200]
+        dot = chunk.rfind(". ")
+        if dot > 60:
+            chunk = chunk[:dot + 1]
+
+        url = p.get("url", "") or ""
+        ref = url if url.startswith("http") else (p.get("author", "") or "")
+        if ref and not ref.startswith("@"):
+            ref = "@" + ref
+
+        items.append((_score, topic, chunk.strip(), primary, ref, p.get("likes", 0), matched))
+
+    return items
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default=str(_CFG["feeds_file"]))
@@ -187,93 +241,33 @@ def main():
         {**p, "_from": "feed"} for p in feed_posts
     ] + knowledge_items
 
-    scored = []
-    for p in all_posts:
-        s, matched = score_post(p, pillars, weights)
-        if s > 0:
-            scored.append((s, matched, p))
+    items = build_brainstorm_items(all_posts, pillars, weights, max_per_pillar=3)
 
-    scored.sort(key=lambda x: -x[0])
-    scored = scored[:args.max]
-
-    if not scored:
+    if not items:
         print("No relevant posts found.")
         sys.exit(0)
 
-    feed_count = sum(1 for _, _, p in scored if p.get("_from") == "feed")
-    knowledge_count = sum(1 for _, _, p in scored if p.get("_from") == "knowledge")
-
-    # Header
-    today = datetime.now().strftime("%a %d %b")
-    print(f"💡 Brainstorm — {today}")
-    count_parts = []
-    if feed_count:
-        count_parts.append(f"Feed: {feed_count}")
-    if knowledge_count:
-        count_parts.append(f"Knowledge: {knowledge_count}")
-    print(" · ".join(count_parts))
-
-    # Group items by primary pillar
-    by_pillar: dict[str, list[tuple[int, list[str], dict]]] = {}
-    for entry in scored:
-        _score, matched, _post = entry
-        primary = matched[0] if matched else "General"
-        by_pillar.setdefault(primary, []).append(entry)
+    today = datetime.now().strftime("%a %d %b %Y")
+    print(f"**💡 Hum Brainstorm — {today}**")
+    print()
 
     item_num = 0
-    for pillar_name, items in by_pillar.items():
-        print(f"\n{pillar_name}")
-        print("─" * len(pillar_name))
-        for _score, matched, p in items:
-            item_num += 1
-            raw_title = p.get("title")
-            title = raw_title.strip() if raw_title and raw_title != "None" else ""
-            text_body = (p.get("content") or p.get("text") or "").strip()
-
-            # Topic: short headline (from title, or first sentence of content)
-            if title:
-                topic = title
-            else:
-                # Use first sentence or first 80 chars as topic
-                first_sent = text_body.split(". ")[0].split(".\n")[0].split("\n\n")[0]
-                topic = first_sent[:80].rstrip(".")
-            print(f"{item_num}. {topic}")
-
-            # Summary: 1-2 sentences describing what the article/post is about
-            # Use text beyond the topic line, up to 200 chars
-            summary = text_body
-            if summary.startswith(topic):
-                summary = summary[len(topic):].lstrip(". \n")
-            # Clean up: collapse newlines into spaces for a tidy one-liner
-            if summary:
-                summary = " ".join(summary.split())
-                chunk = summary[:200]
-                dot = chunk.rfind(". ")
-                if dot > 60:
-                    chunk = chunk[:dot + 1]
-                if chunk.strip():
-                    print(f"   {chunk.strip()}")
-
-            # Why: pillar relevance and engagement signal
-            why_parts = []
-            if len(matched) >= 2:
-                why_parts.append(f"Spans {' + '.join(matched)}")
-            elif matched:
-                why_parts.append(f"Matches {matched[0]}")
-            if p.get("likes", 0) >= 100:
-                why_parts.append(f"High engagement ({p['likes']})")
-            if why_parts:
-                print(f"   Why: {' · '.join(why_parts)}")
-
-            # Ref: link to the source (prefer URL, fall back to author)
-            url = p.get("url", "")
-            if url and url.startswith("http"):
-                print(f"   Ref: {url}")
-            else:
-                author = p.get("author", "")
-                if author:
-                    print(f"   Ref: {author if author.startswith('@') else '@' + author}")
-            print()
+    for score, topic, summary, pillar, ref, likes, matched in items:
+        item_num += 1
+        print(f"{item_num}. {topic}")
+        print(f"   Pillar: {pillar}")
+        if summary:
+            print(f"   {summary}")
+        why_parts = []
+        if len(matched) >= 2:
+            why_parts.append(f"Spans {' + '.join(matched)}")
+        if likes >= 100:
+            why_parts.append(f"High engagement ({likes})")
+        if why_parts:
+            print(f"   Why: {' · '.join(why_parts)}")
+        if ref:
+            print(f"   Ref: {ref}")
+        print()
 
 
 if __name__ == "__main__":
