@@ -40,6 +40,7 @@ from feed.source.x import (
 from feed.source.hn import fetch_hn
 from feed.source.knowledge import load_sources as load_knowledge_sources, crawl_all as crawl_knowledge, new_articles_as_feed_items
 from lib import bird_x as _bird
+from lib.atomic_io import atomic_merge_json, atomic_write_json, compute_dedupe_key
 
 _CFG = load_config()
 DEFAULT_OUTPUT = str(_CFG["feeds_file"])
@@ -60,25 +61,19 @@ def write_feed_source_config(cfg: dict, sources: dict) -> None:
                 "prefer_longform": entry.get("prefer_longform", False)
             }
     config_path = Path(cfg["feed_dir"]) / "feed_source_config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    atomic_write_json(config_path, config)
 
 
 def _merge_into_feeds(feeds_path: Path, new_items: list[dict]) -> None:
-    """Merge new feed items into feeds.json, deduplicating by URL."""
-    existing: list[dict] = []
-    if feeds_path.exists():
-        try:
-            existing = json.loads(feeds_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            existing = []
+    """Atomically merge normalized feed items into feeds.json by stable dedupe_key.
 
-    existing_urls = {p.get("url") for p in existing if p.get("url")}
-    added = [normalize_item(item) for item in new_items if item.get("url") not in existing_urls]
-    merged = [normalize_item(p) for p in existing] + added
-
-    feeds_path.parent.mkdir(parents=True, exist_ok=True)
-    feeds_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    `normalize_item` stamps each item with a `dedupe_key` (per-source: x:<id>,
+    hn:<id>, yt:<id>, rss:<sha1(url)>). atomic_merge_json reads the existing
+    list, dedupes the union, and writes back via temp-then-rename so a crash
+    mid-write cannot corrupt the feed.
+    """
+    normalized = [normalize_item(item) for item in new_items]
+    atomic_merge_json(feeds_path, normalized, compute_dedupe_key)
 
 
 def _expand_threads(items: list[dict]) -> list[dict]:
@@ -193,8 +188,7 @@ def refresh_hn(
     non_hn = [p for p in existing if p.get("source") != "hn"]
     merged = non_hn + items
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    atomic_write_json(output_path, merged)
     print(f"  Fetched {len(items)} HN stories → {output_path}")
     return items
 

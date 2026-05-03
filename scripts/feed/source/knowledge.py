@@ -32,6 +32,7 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 from config import load_config
 from feed.source.handlers.common import KNOWLEDGE_DIR, INDEX_FILE, source_dir
 from feed.source.handlers import rss, sitemap, youtube_transcript, podcast
+from feed.source.x import classify as classify_topics
 
 HANDLERS = {
     "rss": rss.crawl,
@@ -151,6 +152,47 @@ def crawl_all(sources: List[Dict[str, str]], max_articles: int = 0, recrawl: boo
 
 # -- Feed item generation -----------------------------------------------------
 
+_MIN_SNIPPET_CHARS = 80
+_MAX_SNIPPET_CHARS = 300
+
+
+def _extract_snippet(body: str) -> str:
+    """Return the first substantive paragraph from an article body.
+
+    Walks the body line-by-line, skipping markdown headers and lines that are
+    just an image or a bare link, and accumulates text until a blank line
+    appears after we've built up at least _MIN_SNIPPET_CHARS. Falls back to a
+    truncated raw excerpt if no clean paragraph emerges.
+    """
+    paragraph_parts: list[str] = []
+    length = 0
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if length >= _MIN_SNIPPET_CHARS:
+                break
+            continue
+        if re.match(r"^#+\s", line):
+            continue
+        # Skip lines that are only an image or a bare markdown link
+        if re.match(r"^!\[.*\]\(.*\)\s*$", line):
+            continue
+        if re.match(r"^\[.*\]\(.*\)\s*$", line):
+            continue
+        paragraph_parts.append(line)
+        length += len(line) + 1
+
+    text = " ".join(paragraph_parts).strip()
+    if not text:
+        # Fallback: flat truncation of the raw body, stripping markdown headers
+        fallback = re.sub(r"^#+\s+.*$", "", body, flags=re.MULTILINE).strip()
+        text = fallback
+
+    if len(text) > _MAX_SNIPPET_CHARS:
+        text = text[:_MAX_SNIPPET_CHARS].rsplit(" ", 1)[0] + "…"
+    return text
+
+
 def new_articles_as_feed_items(sources: List[Dict[str, str]], since: str = "") -> List[dict]:
     """Scan knowledge dirs for articles newer than `since` (ISO date) and return
     them as feed-compatible item dicts for merging into feeds.json."""
@@ -182,22 +224,23 @@ def new_articles_as_feed_items(sources: List[Dict[str, str]], since: str = "") -
             post_type_map = {"rss": "article", "sitemap": "article", "youtube": "video", "podcast": "podcast"}
             post_type = post_type_map.get(handler, "article")
 
-            # Extract first 300 chars of body as snippet
+            # Extract the first substantive paragraph as the snippet
             body_start = fm_match.end()
-            body = text[body_start:body_start + 500].strip()
-            # Remove markdown headers
-            body = re.sub(r"^#+\s+.*$", "", body, flags=re.MULTILINE).strip()
-            snippet = body[:300].rsplit(" ", 1)[0] if len(body) > 300 else body
+            body = text[body_start:body_start + 2000]
+            snippet = _extract_snippet(body)
+
+            title = title_m.group(1).strip() if title_m else f.stem
+            topics = classify_topics(f"{title} {snippet}")
 
             items.append({
                 "source": "knowledge",
                 "author": author_m.group(1).strip() if author_m else src.get("author", ""),
-                "title": title_m.group(1).strip() if title_m else f.stem,
+                "title": title,
                 "content": snippet,
                 "post_type": post_type,
                 "url": url_m.group(1).strip() if url_m else "",
                 "timestamp": date,
-                "topics": [],
+                "topics": topics,
                 "likes": 0,
                 "retweets": 0,
                 "replies": 0,

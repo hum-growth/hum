@@ -242,6 +242,7 @@ def main():
     ] + knowledge_items
 
     items = build_brainstorm_items(all_posts, pillars, weights, max_per_pillar=3)
+    items = items[:args.max]
 
     if not items:
         print("No relevant posts found.")

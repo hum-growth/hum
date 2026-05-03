@@ -20,6 +20,7 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
+from lib.atomic_io import atomic_write_json
 
 SOURCE_TYPES = ("x_feed", "x_profile", "youtube", "website")
 
@@ -40,9 +41,7 @@ def load_sources(path: Path) -> dict:
 
 
 def save_sources(path: Path, data: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_write_json(path, data)
     print(f"Saved -> {path}")
 
 

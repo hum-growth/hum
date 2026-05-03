@@ -32,6 +32,7 @@ _CFG = load_config()
 DEFAULT_SOURCES_FILE = _CFG["sources_file"]
 
 from lib import youtube_yt  # noqa: E402
+from lib.atomic_io import atomic_write_json  # noqa: E402
 
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -241,8 +242,7 @@ def main() -> None:
     items = build_feed_items(creators, args.days, args.max_videos_per_creator)
 
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    atomic_write_json(output_path, items)
     print(json.dumps(items, indent=2))
 
 

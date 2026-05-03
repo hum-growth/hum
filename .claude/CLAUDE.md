@@ -9,18 +9,18 @@ Hum handles the full content lifecycle: crawls your feed sources daily and sends
 | Command | What it does |
 |---------|-------------|
 | `/hum init` | Set up data directory with templates |
-| `/hum loop` | Run the full daily morning workflow |
+| `/hum loop` | Run the daily digest only (sends ranked feed to Telegram). Engage/brainstorm/learn are separate manual commands. |
 | `/hum refresh-feed` | Crawl all sources, rank, send digest |
 | `/hum crawl` | Crawl knowledge sources (blogs, podcasts, YouTube transcripts) |
 | `/hum sources` | Manage feed sources (X, YouTube, websites) |
 | `/hum config` | Show current configuration |
-| `/hum brainstorm` | Research topics and generate content ideas |
-| `/hum learn` | Refresh content strategy |
+| `/hum brainstorm` | Research topics and generate content ideas (manual; not part of `/hum loop`) |
+| `/hum learn` | Refresh content strategy (manual; not part of `/hum loop`) |
 | `/hum ideas` | Show idea pipeline |
 | `/hum content` | List drafts |
 | `/hum create [platform] [type] [idea]` | Draft a post |
 | `/hum publish [draft]` | Publish to X or LinkedIn |
-| `/hum engage [platform]` | Follow suggestions, replies, engagement |
+| `/hum engage [platform]` | Follow suggestions, replies, engagement (manual; not part of `/hum loop`) |
 | `/hum samples` | Collect writing samples from social media |
 | `/hum feedback` | Upvote/downvote digest items |
 

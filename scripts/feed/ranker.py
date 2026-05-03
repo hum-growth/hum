@@ -17,12 +17,13 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 from config import load_config
 from feed.utils import STOPWORDS, parse_likes
 from feed.blocklist import load_blocklist, is_blocked
+from lib.atomic_io import atomic_write_json
 _CFG = load_config()
 ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 FEED_SOURCE_CONFIG_FILE = str(_CFG["feed_dir"] / "feed_source_config.json")
 
-DEFAULT_SOURCE_WEIGHTS = {"hn": 0.5, "x": 1.0, "x_feed": 1.0, "knowledge": 1.2, "youtube": 1.0}
+DEFAULT_SOURCE_WEIGHTS = {"hn": 0.5, "x": 1.0, "knowledge": 10.0, "youtube": 1.0}
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -137,8 +138,7 @@ def main():
     # Sort by score descending within each topic group
     scored.sort(key=lambda p: -p["_score"])
 
-    with open(args.output, "w") as f:
-        json.dump(scored, f, indent=2)
+    atomic_write_json(Path(args.output), scored)
 
     if args.verbose:
         print(f"Ranked {len(scored)} posts:")

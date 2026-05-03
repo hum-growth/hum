@@ -109,4 +109,6 @@ When drafting, add `image_prompt` to the post. Calling `validate(post)` auto-gen
 
 ## Daily Loop
 
-`/hum loop` runs the full morning workflow. See `LOOP.md` for the step-by-step instructions. Individual steps call scripts from `scripts/` where needed.
+`/hum loop` runs the daily digest only — fetches feeds, ranks, sends digest to Telegram. See `LOOP.md` for the step-by-step instructions.
+
+`/hum engage`, `/hum brainstorm`, and `/hum learn` are separate manual commands, not part of `/hum loop`. Run them ad-hoc when you want them.

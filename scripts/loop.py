@@ -22,9 +22,13 @@ import argparse
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +38,7 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_channel_config, load_channel_handle, load_config, load_topics, load_x_credentials
 from lib import bird_x
+from lib.atomic_io import atomic_merge_json, atomic_write_json, compute_dedupe_key
 
 _CFG = load_config()
 
@@ -96,9 +101,63 @@ def _send_to_target(target_str: str, text: str, dry_run: bool = False) -> None:
         print(f"[loop] sending chunk {i}/{len(chunks)} to {target_str} ({len(chunk)} chars)", file=sys.stderr)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            print(f"[loop] send failed: {proc.stderr.strip()}", file=sys.stderr)
-        else:
-            print(f"[loop] sent ok", file=sys.stderr)
+            err = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            if channel == "telegram" and _send_telegram_direct(account, recipient, chunk):
+                print(f"[loop] sent ok via Telegram Bot API fallback", file=sys.stderr)
+                continue
+            print(f"[loop] send failed: {err}", file=sys.stderr)
+            raise RuntimeError(f"send failed for {target_str} chunk {i}/{len(chunks)}: {err}")
+        print(f"[loop] sent ok", file=sys.stderr)
+
+
+def _send_telegram_direct(account: str | None, recipient: str, text: str) -> bool:
+    """Fallback Telegram sender for when the OpenClaw CLI plugin loader is broken.
+
+    The daily loop runs outside the agent process, so its normal delivery path is
+    `openclaw message send`. If OpenClaw's staged plugin runtime is temporarily
+    broken, we can still deliver the digest through Telegram's Bot API using the
+    bot token already configured in openclaw.json.
+    """
+    token = _load_openclaw_telegram_bot_token(account)
+    if not token:
+        return False
+    try:
+        data = urllib.parse.urlencode({
+            "chat_id": recipient,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return bool(payload.get("ok"))
+    except Exception as exc:
+        print(f"[loop] Telegram Bot API fallback failed: {exc}", file=sys.stderr)
+        return False
+
+
+def _load_openclaw_telegram_bot_token(account: str | None) -> str | None:
+    oc_path = Path.home() / ".openclaw" / "openclaw.json"
+    try:
+        with oc_path.open(encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return None
+    telegram = cfg.get("channels", {}).get("telegram", {})
+    accounts = telegram.get("accounts", {})
+    account_cfg = None
+    if account:
+        account_cfg = accounts.get(account)
+    elif len(accounts) == 1:
+        account_cfg = next(iter(accounts.values()))
+    if not isinstance(account_cfg, dict):
+        return None
+    token = account_cfg.get("botToken")
+    return token if isinstance(token, str) and token else None
 
 
 def _loop_run_dir() -> Path:
@@ -147,7 +206,7 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
     runs_jsonl = feed_dir / "runs.jsonl"
 
     try:
-        run_log.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        atomic_write_json(run_log, summary)
     except OSError as exc:
         print(f"[loop] Could not write run_log.json: {exc}", file=sys.stderr)
 
@@ -160,7 +219,7 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
     # Also save summary to the loop run directory
     try:
         loop_summary = _loop_run_dir() / "summary.json"
-        loop_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        atomic_write_json(loop_summary, summary)
     except OSError as exc:
         print(f"[loop] Could not write loop summary: {exc}", file=sys.stderr)
 
@@ -168,7 +227,7 @@ def _write_run_summary(data_dir: Path, summary: dict) -> None:
 # ── Step 1: Feed Digest ────────────────────────────────────────────────────
 
 
-def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False) -> dict:
+def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False, include_seen: bool = False) -> dict:
     """Fetch feeds, rank, format digest.
 
     All sources fetch directly via API/subprocess — no browser automation.
@@ -203,17 +262,8 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False) -
         try:
             hn_items = json.loads(hn_path.read_text())
             hn_count = len(hn_items)
-            existing = []
-            if Path(feeds_file).exists():
-                existing = json.loads(Path(feeds_file).read_text())
-            seen_urls = {p.get("url") for p in existing if p.get("url")}
-            merged = list(existing)
-            for item in hn_items:
-                if item.get("url") and item["url"] not in seen_urls:
-                    seen_urls.add(item["url"])
-                    merged.append(item)
-            Path(feeds_file).write_text(json.dumps(merged, indent=2))
-            print(f"[loop] Merged {hn_count} HN posts → feeds_file ({len(merged)} total)", file=sys.stderr)
+            added, total = atomic_merge_json(Path(feeds_file), hn_items, compute_dedupe_key)
+            print(f"[loop] Merged {added}/{hn_count} new HN posts → feeds_file ({total} total)", file=sys.stderr)
         except (json.JSONDecodeError, OSError) as exc:
             print(f"[loop] Could not merge HN feed: {exc}", file=sys.stderr)
     crawl_counts["hn"] = hn_count
@@ -273,11 +323,15 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False) -
         allow_fail=True,
     )
 
+    digest_cmd = [sys.executable, str(feed_dir / "digest.py"),
+                  "--input", ranked_feed, "--youtube-input", youtube_feed,
+                  "--max-posts", str(max_posts)]
+    if include_seen:
+        digest_cmd.append("--include-seen")
+
     _, digest_output = run_step(
         "Format digest",
-        [sys.executable, str(feed_dir / "digest.py"),
-         "--input", feeds_file, "--youtube-input", youtube_feed,
-         "--max-posts", str(max_posts)],
+        digest_cmd,
     )
 
     _save_step_output("digest", digest_output)
@@ -305,12 +359,30 @@ def run_digest(max_posts: int = 12, days: int = 7, skip_youtube: bool = False) -
 # ── Step 2: Engage ─────────────────────────────────────────────────────────
 
 
-def _load_following(handle: str | None) -> tuple[set[str], str]:
+def _save_following_cache(loop_dir: Path, handles: set[str]) -> None:
+    cache_file = loop_dir / "following_cache.json"
+    try:
+        atomic_write_json(cache_file, {"handles": sorted(handles)})
+    except OSError:
+        pass
+
+
+def _load_following_cache(loop_dir: Path) -> set[str]:
+    cache_file = loop_dir / "following_cache.json"
+    if cache_file.exists():
+        try:
+            return set(json.loads(cache_file.read_text()).get("handles", []))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return set()
+
+
+def _load_following(handle: str | None, loop_dir: Path | None = None) -> tuple[set[str], str]:
     """Return (followed_handles, status) for the configured X user.
 
     status is one of: "ok", "no-handle", "no-creds", "fetch-failed".
-    Empty set is returned in every non-ok status so the caller can decide
-    how to surface that to the user.
+    Falls back to a disk cache (following_cache.json) when the live fetch
+    returns empty, so already-followed accounts are excluded even on API glitches.
     """
     if not handle:
         return set(), "no-handle"
@@ -321,9 +393,38 @@ def _load_following(handle: str | None) -> tuple[set[str], str]:
     bird_x.set_credentials(creds["auth_token"], creds["ct0"])
 
     followed = bird_x.fetch_following(handle)
-    if not followed:
-        return set(), "fetch-failed"
-    return followed, "ok"
+    if followed:
+        if loop_dir:
+            _save_following_cache(loop_dir, followed)
+        return followed, "ok"
+
+    # Live fetch failed — fall back to cached list
+    if loop_dir:
+        cached = _load_following_cache(loop_dir)
+        if cached:
+            print(f"[loop] fetch_following failed — using cached following list ({len(cached)} handles)", file=sys.stderr)
+            return cached, "ok"
+
+    return set(), "fetch-failed"
+
+
+def _load_follow_history(loop_dir: Path) -> dict[str, str]:
+    """Return {handle: iso_date_last_suggested} from follow_history.json."""
+    hist_file = loop_dir / "follow_history.json"
+    if hist_file.exists():
+        try:
+            return json.loads(hist_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_follow_history(loop_dir: Path, history: dict[str, str]) -> None:
+    hist_file = loop_dir / "follow_history.json"
+    try:
+        atomic_write_json(hist_file, history)
+    except OSError:
+        pass
 
 
 def _load_audience() -> str:
@@ -443,28 +544,45 @@ def _score_follow_candidates(
     follow_target: str,
     audience_text: str,
     cap: int,
+    fresh_handles: set[str] | None = None,
 ) -> list[dict]:
     """Rank follow candidates against follow_target + audience via openclaw's default model.
 
     Returns up to `cap` {handle, reason} dicts. Falls back to the first `cap`
     candidates (no reason) if the LLM call fails.
+
+    fresh_handles: accounts never previously suggested — the LLM is asked to
+    include at least 1/3 of these to ensure variety across runs.
     """
     if not candidates:
         return []
+
+    fresh_handles = fresh_handles or set()
+    fresh_floor = max(1, cap // 3)
+    has_fresh = any(c["handle"] in fresh_handles for c in candidates)
 
     cand_lines = []
     for i, c in enumerate(candidates, 1):
         followers = c.get("followers", 0)
         sample = c.get("sample", "")[:120]
-        cand_lines.append(f"{i}. @{c['handle']} ({followers} followers): {sample}")
+        tag = " [FRESH]" if c["handle"] in fresh_handles else ""
+        cand_lines.append(f"{i}. @{c['handle']} ({followers} followers){tag}: {sample}")
+
+    fresh_instruction = (
+        f"At least {fresh_floor} of your picks must be tagged [FRESH] (accounts never "
+        "suggested before) to introduce variety — unless fewer than that many qualify. "
+    ) if has_fresh else ""
 
     system_prompt = (
         "You are evaluating X/Twitter accounts as potential follows for a finance operator.\n\n"
         f"Audience the user is building for:\n{audience_text[:800]}\n\n"
         f"Follow target: {follow_target}\n\n"
-        f"Select the best {cap} accounts from the list below. Reject spam, news bots, "
-        "engagement farmers, and unrelated noise. Prefer real practitioners who match "
-        f"the target above. If fewer than {cap} accounts genuinely qualify, return fewer.\n\n"
+        f"Select the best {cap} accounts from the numbered list below. You MUST only pick "
+        "handles that appear in that list — do not invent or suggest any handle not present. "
+        "Reject spam, news bots, engagement farmers, and unrelated noise. Prefer real "
+        f"practitioners who match the target above. {fresh_instruction}"
+        f"If fewer than {cap} accounts genuinely qualify, return fewer. If none qualify, "
+        "return nothing.\n\n"
         "For each pick, output one line:\n"
         "handle | one-line reason tied to the target/audience\n\n"
         "Output ONLY the selected accounts, nothing else. No numbering."
@@ -631,6 +749,7 @@ def run_engage():
 
     feeds_file = Path(_CFG["feeds_file"])
     sources_file = Path(_CFG["sources_file"])
+    loop_dir = Path(_CFG["loop_dir"])
 
     # Load tracked handles from sources.json
     tracked_handles: set[str] = set()
@@ -645,17 +764,35 @@ def run_engage():
             pass
 
     my_handle = load_channel_handle("x")
-    followed, filter_status = _load_following(my_handle)
+    followed, filter_status = _load_following(my_handle, loop_dir)
     if filter_status != "ok":
         print(f"[loop] follower filter unavailable: {filter_status}", file=sys.stderr)
     else:
         print(f"[loop] @{my_handle} follows {len(followed)} accounts on X", file=sys.stderr)
+
+    # Follow suggestion history — exclude recently-suggested accounts for 14 days
+    follow_history = _load_follow_history(loop_dir)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    cutoff_date = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    recently_suggested: set[str] = {h for h, d in follow_history.items() if d >= cutoff_date}
 
     self_exclude = {my_handle.lower()} if my_handle else set()
     exclude = tracked_handles | followed | self_exclude
 
     audience_text = _load_audience()
     voice_text = _load_voice()
+
+    # Load blocked authors (weight = 0 in preferences.json)
+    prefs_file = Path(_CFG["feed_assets"]) / "preferences.json"
+    blocked_authors: set[str] = set()
+    if prefs_file.exists():
+        try:
+            prefs = json.loads(prefs_file.read_text())
+            for author, weight in prefs.get("authors", {}).items():
+                if weight == 0:
+                    blocked_authors.add(author.lstrip("@").lower())
+        except (json.JSONDecodeError, OSError):
+            pass
 
     def _truncate(text: str, n: int) -> str:
         text = " ".join((text or "").split())
@@ -692,10 +829,10 @@ def run_engage():
         if feeds_file.exists():
             try:
                 for p in json.loads(feeds_file.read_text()):
-                    if p.get("source") not in ("x", "x_feed") or not p.get("author"):
+                    if p.get("source") != "x" or not p.get("author"):
                         continue
                     h = p["author"].lstrip("@").lower()
-                    if not h or h in exclude:
+                    if not h or h in exclude or h in blocked_authors:
                         continue
                     text = p.get("content") or p.get("text") or ""
                     entry = feed_pool.setdefault(h, {"handle": h, "followers": 0, "sample": "", "count": 0})
@@ -714,7 +851,7 @@ def run_engage():
                 if keywords:
                     print(f"[loop] Bird topic search for follow candidates...", file=sys.stderr)
                     topic_pool = bird_x.search_accounts_by_topic(keywords, count=80, since_days=7)
-                    topic_pool = [c for c in topic_pool if c["handle"] not in exclude]
+                    topic_pool = [c for c in topic_pool if c["handle"] not in exclude and c["handle"] not in blocked_authors]
                     print(f"[loop] {len(topic_pool)} topic candidates found", file=sys.stderr)
             except Exception as e:
                 print(f"[loop] Bird topic search failed: {e}", file=sys.stderr)
@@ -731,11 +868,23 @@ def run_engage():
                 seen.add(h)
                 all_candidates.append(c)
 
+        # Filter out recently-suggested accounts (14-day cooldown)
+        before_filter = len(all_candidates)
+        all_candidates = [c for c in all_candidates if c["handle"] not in recently_suggested]
+        if before_filter != len(all_candidates):
+            print(f"[loop] filtered {before_filter - len(all_candidates)} recently-suggested accounts", file=sys.stderr)
+
+        # Tag candidates as fresh (never suggested) for variety enforcement
+        fresh_handles = {c["handle"] for c in all_candidates if c["handle"] not in follow_history}
+        print(f"[loop] {len(fresh_handles)} fresh / {len(all_candidates) - len(fresh_handles)} seen candidates", file=sys.stderr)
+
         if all_candidates:
             scored = _score_follow_candidates(
-                all_candidates, follow_target, audience_text, follows_cap
+                all_candidates, follow_target, audience_text, follows_cap, fresh_handles
             )
             by_handle = {c["handle"]: c for c in all_candidates}
+            # Discard any handles the LLM hallucinated that weren't in the candidate pool
+            scored = [s for s in scored if s["handle"] in by_handle]
             for i, s in enumerate(scored, 1):
                 base = by_handle.get(s["handle"], {})
                 followers = base.get("followers", 0)
@@ -750,6 +899,10 @@ def run_engage():
                 lines.append(f"   {reason}")
                 lines.append(f"   https://x.com/{s['handle']}")
                 lines.append("")
+            # Update suggestion history so these accounts enter the 14-day cooldown
+            for s in scored:
+                follow_history[s["handle"]] = today_str
+            _save_follow_history(loop_dir, follow_history)
         else:
             lines.append("No new follow candidates.")
             lines.append("")
@@ -862,7 +1015,7 @@ def run_brainstorm():
 
     _, brainstorm_output = run_step(
         "Filter feed for brainstorm ideas",
-        [sys.executable, str(create_dir / "brainstorm.py"), "--max", "8"],
+        [sys.executable, str(create_dir / "brainstorm.py"), "--max", "5"],
         allow_fail=True,
     )
 
@@ -895,6 +1048,160 @@ def run_learn():
     _save_step_output("learn", text)
 
 
+# ── Supervisor mode (cron entry point) ─────────────────────────────────────
+#
+# When invoked with --supervised, loop.py forks itself: the parent enforces a
+# wall-clock timeout, holds a per-step lock, verifies expected output files
+# after the child exits, and emits a single-line `HUM_RESULT` summary on
+# stdout. The child runs the actual work via the same main() path without
+# --supervised. This is the cron entry point — no bash wrapper required.
+#
+# Exit codes:
+#   0    success (child exited 0 AND expected output files exist)
+#   1    child returned non-zero (general step failure)
+#   2    child returned 0 but expected output files are missing or empty
+#   11   another instance holds the lock (concurrent run rejected)
+#  124   wall-clock timeout (child SIGTERMed, then SIGKILLed after grace)
+
+_EXPECTED_FILES = {
+    "digest": ("digest.md",),
+    "engage": ("engage.md",),
+    "brainstorm": ("brainstorm.md",),
+    "full": ("digest.md", "engage.md", "brainstorm.md"),
+}
+
+
+def _acquire_step_lock(lock_dir: Path) -> bool:
+    """Atomic mkdir-based lock with stale-pid recovery.
+
+    Portable across macOS and Linux (flock isn't on macOS by default).
+    Returns True if the lock is now held by this process, False if a live
+    holder owns it. A holder whose pid is no longer alive is reclaimed.
+    """
+    try:
+        lock_dir.mkdir()
+        (lock_dir / "pid").write_text(str(os.getpid()))
+        return True
+    except FileExistsError:
+        pass
+
+    pid_file = lock_dir / "pid"
+    holder_alive = False
+    try:
+        old_pid = int(pid_file.read_text().strip())
+        os.kill(old_pid, 0)  # raises if dead
+        holder_alive = True
+    except (FileNotFoundError, ValueError, OSError, ProcessLookupError):
+        pass
+
+    if holder_alive:
+        return False
+
+    # Holder is dead — reclaim.
+    shutil.rmtree(lock_dir, ignore_errors=True)
+    try:
+        lock_dir.mkdir()
+        (lock_dir / "pid").write_text(str(os.getpid()))
+        return True
+    except FileExistsError:
+        return False
+
+
+def _read_lock_holder(lock_dir: Path) -> str:
+    try:
+        return (lock_dir / "pid").read_text().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def _child_argv(args) -> list[str]:
+    """Reconstruct loop.py args for the child, dropping supervisor-only flags."""
+    out: list[str] = []
+    if args.step:
+        out += ["--step", args.step]
+    if args.dry_run:
+        out.append("--dry-run")
+    out += ["--max-posts", str(args.max_posts)]
+    out += ["--days", str(args.days)]
+    if args.skip_youtube:
+        out.append("--skip-youtube")
+    return out
+
+
+def _supervise(args) -> int:
+    """Lock + spawn child + enforce timeout + verify outputs + emit HUM_RESULT.
+
+    Never invokes loop logic itself — the child does that. Always prints
+    exactly one HUM_RESULT line on stdout and returns the wrapper exit code.
+    """
+    step = args.step or "full"
+    lock_dir = Path(f"/tmp/hum-loop-{step}.lock.d")
+
+    if not _acquire_step_lock(lock_dir):
+        holder = _read_lock_holder(lock_dir)
+        print(f"HUM_RESULT step={step} exit=11 file=na duration_s=0 "
+              f"reason=lock_busy holder={holder}", flush=True)
+        return 11
+
+    try:
+        cmd = [sys.executable, str(Path(__file__).resolve())] + _child_argv(args)
+        # New session/process group so we can SIGTERM the whole subprocess tree
+        # (loop.py spawns children for HN, X, YouTube, ranker, digest).
+        preexec = os.setsid if hasattr(os, "setsid") else None
+
+        start = time.time()
+        proc = subprocess.Popen(cmd, preexec_fn=preexec)
+
+        def _signal_group(sig: int) -> None:
+            try:
+                os.killpg(os.getpgid(proc.pid), sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        try:
+            child_exit = proc.wait(timeout=args.hard_timeout)
+        except subprocess.TimeoutExpired:
+            _signal_group(signal.SIGTERM)
+            try:
+                proc.wait(timeout=args.kill_grace)
+            except subprocess.TimeoutExpired:
+                _signal_group(signal.SIGKILL)
+                proc.wait()
+            child_exit = 124
+        except KeyboardInterrupt:
+            _signal_group(signal.SIGTERM)
+            proc.wait()
+            child_exit = 130
+
+        duration = round(time.time() - start)
+
+        loop_dir = Path(_CFG["loop_dir"]) / datetime.now().strftime("%Y-%m-%d")
+        expected = _EXPECTED_FILES.get(step, ())
+        missing = [
+            name for name in expected
+            if not (loop_dir / name).exists()
+            or (loop_dir / name).stat().st_size == 0
+        ]
+        file_status = "ok" if not missing else "missing"
+
+        # If the child reported success but produced nothing, that's a distinct
+        # class of failure (silent cred rot, empty digest, etc.) — surface it
+        # as exit=2 so cron alerts on it differently from a script crash.
+        wrapper_exit = child_exit
+        if child_exit == 0 and missing:
+            wrapper_exit = 2
+
+        line = (f"HUM_RESULT step={step} exit={wrapper_exit} file={file_status} "
+                f"duration_s={duration}")
+        if missing:
+            line += f" missing={','.join(missing)}"
+        print(line, flush=True)
+        return wrapper_exit
+
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
@@ -910,7 +1217,19 @@ def main():
                         help="YouTube lookback days (default: 7)")
     parser.add_argument("--skip-youtube", action="store_true",
                         help="Skip YouTube fetch in digest step")
+    parser.add_argument("--include-seen", action="store_true",
+                        help="Include recently-sent items in digest formatting; useful for same-day manual resends")
+    parser.add_argument("--supervised", action="store_true",
+                        help="Cron entry point: fork self, enforce timeout + lock, "
+                             "verify outputs, emit one HUM_RESULT line on stdout.")
+    parser.add_argument("--hard-timeout", type=int, default=1100,
+                        help="(--supervised) wall-clock seconds before SIGTERM (default: 1100)")
+    parser.add_argument("--kill-grace", type=int, default=60,
+                        help="(--supervised) seconds between SIGTERM and SIGKILL (default: 60)")
     args = parser.parse_args()
+
+    if args.supervised:
+        sys.exit(_supervise(args))
 
     is_sunday = datetime.now().weekday() == 6
 
@@ -920,7 +1239,7 @@ def main():
         brainstorm_target = _CFG.get("brainstorm_target")
         engage_target = _CFG.get("engage_target")
         if args.step == "digest":
-            run_digest(args.max_posts, args.days, args.skip_youtube)
+            run_digest(args.max_posts, args.days, args.skip_youtube, args.include_seen)
             digest_file = _loop_run_dir() / "digest.md"
             if digest_target and digest_file.exists():
                 _send_to_target(digest_target, digest_file.read_text(), dry_run=args.dry_run)
@@ -955,7 +1274,7 @@ def main():
     # Step 1: Digest
     t0 = time.time()
     try:
-        counts = run_digest(args.max_posts, args.days, args.skip_youtube)
+        counts = run_digest(args.max_posts, args.days, args.skip_youtube, args.include_seen)
         steps["digest"] = {"status": "ok", "duration_s": round(time.time() - t0, 1), "counts": counts}
         digest_file = _loop_run_dir() / "digest.md"
         if digest_target and digest_file.exists():

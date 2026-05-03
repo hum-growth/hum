@@ -40,7 +40,11 @@ After running, edit each file to set up your profile. The content pillars in `CO
 ## /hum loop
 
 **What it does:**
-Runs the full daily morning workflow. Read `LOOP.md` in the skill root and follow every step.
+Runs the daily **digest only** — fetches X home feed, X profiles, Hacker News, YouTube, and knowledge sources, ranks them, and sends a formatted digest via Telegram. Read `LOOP.md` for the step-by-step instructions.
+
+**Engage, brainstorm, and learn are NOT part of `/hum loop`.** They are separate manual commands (`/hum engage`, `/hum brainstorm`, `/hum learn`). Run them ad-hoc when wanted.
+
+The cron job `Hum Digest Loop` (5:45am SGT) calls `loop.py --step digest --supervised` directly — same digest-only behaviour.
 
 ---
 

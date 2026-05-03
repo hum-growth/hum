@@ -73,7 +73,7 @@
   .empty-state p { font-size: 13px; line-height: 1.5; }
 
   .badge { font-size: 10px; font-weight: 700; border-radius: 4px; padding: 2px 6px; text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; color: #fff; display: inline-block; background: var(--badge-web); }
-  .badge-x, .badge-x_feed, .badge-x_profile { background: var(--badge-x); }
+  .badge-x, .badge-x_profile { background: var(--badge-x); }
   .badge-hn { background: var(--badge-hn); }
   .badge-knowledge { background: var(--badge-rss); }
   .badge-youtube { background: var(--badge-yt); }
@@ -144,6 +144,9 @@
   .ksource-row .ksource-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ksource-row.active .ksource-name { color: var(--accent); font-weight: 500; }
   .ksource-row .ksource-count { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .ksource-row .ksrc-remove-btn { display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1; flex-shrink: 0; }
+  .ksource-row:hover .ksrc-remove-btn { display: block; }
+  .ksource-row .ksrc-remove-btn:hover { color: var(--danger); }
 
   /* ── Article reader ── */
   #article-overlay { display: none; position: fixed; top: 0; right: 0; bottom: 0; width: 55%; min-width: 480px; max-width: 800px; background: var(--surface); box-shadow: -4px 0 24px rgba(0,0,0,.12); z-index: 100; flex-direction: column; overflow: hidden; }
@@ -222,6 +225,21 @@
   .status-drafted { border-left: 3px solid var(--accent); }
   .status-published { border-left: 3px solid var(--success); }
   .status-backlog { border-left: 3px solid var(--muted); }
+
+  /* ── Source management ── */
+  .source-row .src-remove-btn { display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1; flex-shrink: 0; }
+  .source-row:hover .src-remove-btn { display: block; }
+  .source-row .src-remove-btn:hover { color: var(--danger); }
+  .add-source-btn { background: none; border: 1px solid var(--border); color: var(--muted2); border-radius: 4px; padding: 1px 7px; font-size: 14px; cursor: pointer; line-height: 1.4; flex-shrink: 0; }
+  .add-source-btn:hover { border-color: var(--border2); color: var(--text); }
+
+  /* ── Add-source modal ── */
+  #source-modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 200; align-items: center; justify-content: center; }
+  #source-modal { background: var(--surface); border-radius: 12px; padding: 20px; width: 340px; box-shadow: 0 8px 32px rgba(0,0,0,.2); }
+  .sm-label { font-size: 11px; font-weight: 600; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 4px; }
+  .sm-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-size: 13px; color: var(--text); outline: none; }
+  .sm-input:focus { border-color: var(--accent); }
+  .sm-field { margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -261,7 +279,8 @@
       <div class="side-col">
         <div class="side-col-header">
           <h2>Sources</h2>
-          <span id="sources-count" class="panel-count"></span>
+          <span id="sources-count" style="font-size:12px; color:var(--muted); margin-left:6px;"></span>
+          <button id="add-source-btn" class="add-source-btn" title="Add source" style="margin-left:auto;">+</button>
         </div>
         <div class="side-col-list" id="sources-list"></div>
       </div>
@@ -284,7 +303,10 @@
     </div>
     <div class="knowledge-layout">
       <div class="knowledge-sidebar">
-        <div class="side-col-header"><h2>Sources</h2></div>
+        <div class="side-col-header">
+          <h2>Sources</h2>
+          <button id="add-ksource-btn" class="add-source-btn" title="Add knowledge source" style="margin-left:auto;">+</button>
+        </div>
         <div class="side-col-list" id="knowledge-sources-list"></div>
       </div>
       <div class="knowledge-main">
@@ -362,6 +384,69 @@
   </div>
 </div>
 
+<!-- Add-source modal -->
+<div id="source-modal-backdrop">
+  <div id="source-modal">
+    <div style="display:flex; align-items:center; margin-bottom:16px;">
+      <span style="font-size:14px; font-weight:600; flex:1;">Add Source</span>
+      <button id="source-modal-close" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted2); line-height:1; padding:0 2px;">&times;</button>
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Type</label>
+      <select id="sm-type" class="sm-input">
+        <option value="x">X</option>
+        <option value="youtube">YouTube</option>
+      </select>
+    </div>
+    <div id="sm-fields"></div>
+    <div id="sm-error" style="color:var(--danger); font-size:12px; min-height:18px; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button id="sm-cancel" style="background:var(--surface2); border:1px solid var(--border); color:var(--muted2); border-radius:5px; padding:6px 14px; font-size:13px; cursor:pointer;">Cancel</button>
+      <button id="sm-add" style="background:var(--accent); border:none; color:#fff; border-radius:5px; padding:6px 14px; font-size:13px; cursor:pointer; font-weight:500;">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add-knowledge-source modal -->
+<div id="ksource-modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; align-items:center; justify-content:center;">
+  <div id="ksource-modal" style="background:var(--surface); border-radius:12px; padding:20px; width:360px; box-shadow:0 8px 32px rgba(0,0,0,.2);">
+    <div style="display:flex; align-items:center; margin-bottom:16px;">
+      <span style="font-size:14px; font-weight:600; flex:1;">Add Knowledge Source</span>
+      <button id="ksource-modal-close" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted2); line-height:1; padding:0 2px;">&times;</button>
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Key <span style="font-weight:400;text-transform:none;">(slug, e.g. tomtunguz)</span></label>
+      <input id="km-key" class="sm-input" placeholder="tomtunguz">
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Name</label>
+      <input id="km-name" class="sm-input" placeholder="Tom Tunguz">
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Handler</label>
+      <select id="km-handler" class="sm-input">
+        <option value="rss">RSS</option>
+        <option value="sitemap">Sitemap</option>
+        <option value="youtube">YouTube</option>
+        <option value="podcast">Podcast</option>
+      </select>
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Feed URL</label>
+      <input id="km-url" class="sm-input" placeholder="https://...">
+    </div>
+    <div class="sm-field">
+      <label class="sm-label">Author <span style="font-weight:400;text-transform:none;">(optional)</span></label>
+      <input id="km-author" class="sm-input" placeholder="">
+    </div>
+    <div id="km-error" style="color:var(--danger); font-size:12px; min-height:18px; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button id="km-cancel" style="background:var(--surface2); border:1px solid var(--border); color:var(--muted2); border-radius:5px; padding:6px 14px; font-size:13px; cursor:pointer;">Cancel</button>
+      <button id="km-add" style="background:var(--accent); border:none; color:#fff; border-radius:5px; padding:6px 14px; font-size:13px; cursor:pointer; font-weight:500;">Add</button>
+    </div>
+  </div>
+</div>
+
 <!-- Article reader overlay -->
 <div id="article-overlay-backdrop"></div>
 <div id="article-overlay">
@@ -408,6 +493,15 @@ async function api(path) {
   if (!r.ok) throw new Error(`API ${r.status}`);
   const ct = r.headers.get('content-type') || '';
   return ct.includes('json') ? r.json() : r.text();
+}
+
+async function apiPost(path, body) {
+  const r = await fetch('/api/' + path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return r.json();
 }
 
 // ── Simple markdown renderer ────────────────────────────────────────────────
@@ -566,7 +660,7 @@ function renderFeed() {
   }
   list.innerHTML = '';
 
-  const SOURCE_LABELS = {x:'X', x_feed:'X Feed', hn:'HN', knowledge:'Knowledge', youtube:'YouTube', website:'Web'};
+  const SOURCE_LABELS = {x:'X', hn:'HN', knowledge:'Knowledge', youtube:'YouTube', website:'Web'};
 
   items.forEach(item => {
     const el = document.createElement('div');
@@ -622,8 +716,8 @@ function renderFeed() {
   });
 }
 
-const TYPE_LABELS = { x_feed:'X Feed', x_profile:'X Profiles', youtube:'YouTube', website:'Websites' };
-const TYPE_ORDER = ['x_feed','x_profile','youtube','website'];
+const TYPE_LABELS = { x_feed:'X Feed', x_profile:'X', youtube:'YouTube' };
+const TYPE_ORDER = ['x_feed','x_profile','youtube'];
 
 function renderFeedSources() {
   const grouped = {};
@@ -645,7 +739,11 @@ function renderFeedSources() {
       row.className = 'source-row';
       const name = s.handle ? '@'+s.handle : (s.name || s.url || s.type);
       const crawled = s.last_crawled ? formatTime(s.last_crawled) : 'never';
-      row.innerHTML = `<span class="source-name">${esc(name)}</span><span class="source-crawled">${esc(crawled)}</span>`;
+      row.innerHTML = `<span class="source-name">${esc(name)}</span><span class="source-crawled">${esc(crawled)}</span><button class="src-remove-btn" title="Remove source">&times;</button>`;
+      row.querySelector('.src-remove-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        removeSource(s);
+      });
       row.addEventListener('click', () => {
         const sel = document.getElementById('feed-filter-source');
         const val = s.source || s.type;
@@ -707,7 +805,12 @@ function renderKnowledgeSources() {
       <span class="badge" style="background:${handlerColor};font-size:9px;padding:1px 4px">${esc(src.handler)}</span>
       <span class="ksource-name">${esc(src.name)}</span>
       <span class="ksource-count">${src.article_count||0}</span>
+      <button class="ksrc-remove-btn" title="Remove source">&times;</button>
     `;
+    row.querySelector('.ksrc-remove-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      removeKnowledgeSource(src);
+    });
     row.addEventListener('click', () => {
       kCurrentSource = kCurrentSource === src.key ? '' : src.key;
       kOffset = 0;
@@ -1167,6 +1270,142 @@ async function loadLearnFile(filename) {
     document.getElementById('learn-content').innerHTML = `<p style="color:var(--danger)">Error: ${esc(e.message)}</p>`;
   }
 }
+
+// ── Source management ────────────────────────────────────────────────────────
+
+const SM_FIELDS = {
+  x: `<div class="sm-field"><label class="sm-label">Handle</label><input id="sm-handle" class="sm-input" placeholder="@username"></div>`,
+  youtube: `<div class="sm-field"><label class="sm-label">URL or Handle</label><input id="sm-url" class="sm-input" placeholder="https://youtube.com/@channel or @handle"></div><div class="sm-field"><label class="sm-label">Name (optional)</label><input id="sm-name" class="sm-input" placeholder="Channel name"></div>`,
+};
+
+function showAddSourceModal() {
+  document.getElementById('source-modal-backdrop').style.display = 'flex';
+  document.getElementById('sm-error').textContent = '';
+  updateModalFields();
+  setTimeout(() => { document.querySelector('#sm-fields input')?.focus(); }, 50);
+}
+
+function hideSourceModal() {
+  document.getElementById('source-modal-backdrop').style.display = 'none';
+}
+
+function updateModalFields() {
+  const type = document.getElementById('sm-type').value;
+  document.getElementById('sm-fields').innerHTML = SM_FIELDS[type] || '';
+  document.getElementById('sm-error').textContent = '';
+}
+
+async function addSource() {
+  const type = document.getElementById('sm-type').value;
+  const errEl = document.getElementById('sm-error');
+  const body = {type};
+
+  if (type === 'x') {
+    body.handle = (document.getElementById('sm-handle')?.value || '').trim();
+    if (!body.handle) { errEl.textContent = 'Handle is required'; return; }
+  } else if (type === 'youtube') {
+    body.url = (document.getElementById('sm-url')?.value || '').trim();
+    body.name = (document.getElementById('sm-name')?.value || '').trim();
+    if (!body.url) { errEl.textContent = 'URL or handle is required'; return; }
+  }
+
+  const btn = document.getElementById('sm-add');
+  btn.disabled = true; btn.textContent = 'Adding...';
+  try {
+    const res = await apiPost('sources/add', body);
+    if (res.ok) { hideSourceModal(); await loadFeed(); }
+    else { errEl.textContent = res.message || 'Failed to add source'; }
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add';
+  }
+}
+
+async function removeSource(s) {
+  const target = s.handle || s.name || s.url;
+  if (!confirm(`Remove ${target}?`)) return;
+  try {
+    const res = await apiPost('sources/remove', {target});
+    if (res.ok) { await loadFeed(); }
+    else { alert(res.message || 'Failed to remove source'); }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+document.getElementById('add-source-btn').addEventListener('click', showAddSourceModal);
+document.getElementById('source-modal-close').addEventListener('click', hideSourceModal);
+document.getElementById('sm-cancel').addEventListener('click', hideSourceModal);
+document.getElementById('sm-add').addEventListener('click', addSource);
+document.getElementById('sm-type').addEventListener('change', updateModalFields);
+document.getElementById('source-modal-backdrop').addEventListener('click', e => {
+  if (e.target === e.currentTarget) hideSourceModal();
+});
+document.getElementById('source-modal').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addSource();
+  if (e.key === 'Escape') hideSourceModal();
+});
+
+// ── Knowledge source management ──────────────────────────────────────────────
+
+function showAddKSourceModal() {
+  document.getElementById('ksource-modal-backdrop').style.display = 'flex';
+  document.getElementById('km-error').textContent = '';
+  ['km-key','km-name','km-url','km-author'].forEach(id => document.getElementById(id).value = '');
+  setTimeout(() => document.getElementById('km-key').focus(), 50);
+}
+
+function hideKSourceModal() {
+  document.getElementById('ksource-modal-backdrop').style.display = 'none';
+}
+
+async function addKnowledgeSource() {
+  const errEl = document.getElementById('km-error');
+  const key = document.getElementById('km-key').value.trim();
+  const name = document.getElementById('km-name').value.trim();
+  const handler = document.getElementById('km-handler').value;
+  const url = document.getElementById('km-url').value.trim();
+  const author = document.getElementById('km-author').value.trim();
+
+  if (!key) { errEl.textContent = 'Key is required'; return; }
+  if (!url) { errEl.textContent = 'Feed URL is required'; return; }
+
+  const btn = document.getElementById('km-add');
+  btn.disabled = true; btn.textContent = 'Adding...';
+  try {
+    const res = await apiPost('knowledge/sources/add', {key, name, handler, url, author});
+    if (res.ok) { hideKSourceModal(); await loadKnowledge(); }
+    else { errEl.textContent = res.message || 'Failed to add source'; }
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add';
+  }
+}
+
+async function removeKnowledgeSource(src) {
+  if (!confirm(`Remove ${src.name || src.key} from knowledge/index.md?`)) return;
+  try {
+    const res = await apiPost('knowledge/sources/remove', {key: src.key});
+    if (res.ok) { await loadKnowledge(); }
+    else { alert(res.message || 'Failed to remove source'); }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+document.getElementById('add-ksource-btn').addEventListener('click', showAddKSourceModal);
+document.getElementById('ksource-modal-close').addEventListener('click', hideKSourceModal);
+document.getElementById('km-cancel').addEventListener('click', hideKSourceModal);
+document.getElementById('km-add').addEventListener('click', addKnowledgeSource);
+document.getElementById('ksource-modal-backdrop').addEventListener('click', e => {
+  if (e.target === e.currentTarget) hideKSourceModal();
+});
+document.getElementById('ksource-modal').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addKnowledgeSource();
+  if (e.key === 'Escape') hideKSourceModal();
+});
 
 // ── Tab loaders ─────────────────────────────────────────────────────────────
 

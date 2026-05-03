@@ -18,12 +18,13 @@ sys.path.insert(0, str(_SCRIPTS_ROOT))
 from config import load_config
 from feed.utils import STOPWORDS
 from feed import blocklist as _blocklist
+from lib.atomic_io import atomic_write_json
 _CFG = load_config()
 ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 LOG_FILE = os.path.join(ASSETS_DIR, "feedback_log.json")
 
-VALID_SOURCES = ("hn", "x", "x_feed", "knowledge", "youtube")
+VALID_SOURCES = ("hn", "x", "knowledge", "youtube")
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -32,9 +33,7 @@ def load_json(path, default):
     return default
 
 def save_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_json(Path(path), data)
 
 def extract_keywords(text: str) -> list[str]:
     words = text.lower().replace("'s", "").split()

@@ -19,6 +19,7 @@ if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 
 from config import load_config
+from lib.atomic_io import atomic_write_json
 
 
 def blocklist_path() -> str:
@@ -45,7 +46,6 @@ def load_blocklist() -> dict:
 
 def save_blocklist(data: dict) -> None:
     path = blocklist_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     # Store lowercased, @-free canonical form + preserve original casing on first seen
     authors = data.get("authors", [])
     seen = {}
@@ -54,8 +54,7 @@ def save_blocklist(data: dict) -> None:
         if key and key not in seen:
             seen[key] = a.strip()
     out = {"authors": sorted(seen.values(), key=str.lower)}
-    with open(path, "w") as f:
-        json.dump(out, f, indent=2)
+    atomic_write_json(Path(path), out)
 
 
 def is_blocked(author: str, blocklist: dict | None = None) -> bool:

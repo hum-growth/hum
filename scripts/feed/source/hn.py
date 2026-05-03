@@ -33,6 +33,8 @@ import urllib.error
 _SCRIPTS_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_SCRIPTS_ROOT))
 
+from lib.atomic_io import atomic_write_json
+
 from config import load_config
 from feed.source.x import classify
 
@@ -222,8 +224,7 @@ def main() -> None:
     print(f"[HN] Got {len(items)} stories (top {ENRICH_LIMIT} enriched with comments)", file=sys.stderr)
 
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    atomic_write_json(output_path, items)
     print(json.dumps(items, indent=2))
 
 

@@ -62,11 +62,23 @@ def normalize_item(d: dict) -> dict:
         "display_name": d.get("display_name") or None,
     }
 
+    # Preserve source-specific identifiers needed for dedupe + downstream lookups.
+    if d.get("object_id"):
+        result["object_id"] = d["object_id"]
+
     # Preserve pipeline-internal fields set by ranker/brainstorm
     if "_score" in d:
         result["_score"] = d["_score"]
     if "_from" in d:
         result["_from"] = d["_from"]
+
+    # Stamp a stable dedupe key so atomic_merge_json can dedupe across sources
+    # without relying on URL alone. Falls back to URL-derived sha1 when no
+    # source-specific id is available.
+    from lib.atomic_io import compute_dedupe_key  # local import to avoid cycle
+    key = d.get("dedupe_key") or compute_dedupe_key(result)
+    if key:
+        result["dedupe_key"] = key
 
     return result
 

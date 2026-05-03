@@ -72,6 +72,150 @@ def _load_ideas():
     _ideas = raw if isinstance(raw, list) else raw.get("ideas", [])
 
 
+def _save_sources(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _sources_add(body: dict) -> tuple[bool, str]:
+    src_type = body.get("type", "")
+    path = _CFG["sources_file"]
+    sources = _load_json(path, {"feed_sources": []})
+    if "feed_sources" not in sources:
+        sources["feed_sources"] = []
+
+    if src_type == "x":
+        handle = body.get("handle", "").lstrip("@").strip()
+        if not re.match(r'^[A-Za-z0-9_]{1,15}$', handle):
+            return False, f"Invalid handle: {handle}"
+        if any(s.get("handle", "").lower() == handle.lower()
+               for s in sources["feed_sources"] if s.get("type") == "x_profile"):
+            return False, f"@{handle} already exists"
+        sources["feed_sources"].append({
+            "type": "x_profile", "handle": handle,
+            "category": body.get("category", ""), "description": "", "last_crawled": None,
+        })
+        _save_sources(path, sources)
+        return True, f"Added @{handle}"
+
+    elif src_type == "youtube":
+        url = body.get("url", "").strip()
+        name = body.get("name", "").strip() or url
+        if not ("youtube.com" in url or "youtu.be" in url or url.startswith("@")):
+            return False, f"Invalid YouTube URL or handle: {url}"
+        if any(s.get("url", "").lower() == url.lower()
+               for s in sources["feed_sources"] if s.get("type") == "youtube"):
+            return False, f"{url} already exists"
+        sources["feed_sources"].append({
+            "type": "youtube", "name": name, "url": url, "description": "", "last_crawled": None,
+        })
+        _save_sources(path, sources)
+        return True, f"Added YouTube: {name}"
+
+    elif src_type == "website":
+        name = body.get("name", "").strip()
+        url = body.get("url", "").strip()
+        if not name or not url:
+            return False, "Name and URL are required"
+        if any(s.get("name", "").lower() == name.lower()
+               for s in sources["feed_sources"] if s.get("type") == "website"):
+            return False, f"{name} already exists"
+        sources["feed_sources"].append({
+            "type": "website", "name": name, "url": url, "last_crawled": None,
+        })
+        _save_sources(path, sources)
+        return True, f"Added website: {name}"
+
+    else:
+        return False, f"Unknown type: {src_type}"
+
+
+def _sources_remove(body: dict) -> tuple[bool, str]:
+    target = body.get("target", "").lstrip("@").strip().rstrip("/").lower()
+    path = _CFG["sources_file"]
+    sources = _load_json(path, {"feed_sources": []})
+    if "feed_sources" not in sources:
+        return False, "No sources"
+
+    for i, s in enumerate(sources["feed_sources"]):
+        match = False
+        if s.get("type") == "x_profile" and s.get("handle", "").lower() == target:
+            match = True
+        elif s.get("type") == "youtube" and (
+            s.get("name", "").lower() == target or s.get("url", "").lower() == target
+        ):
+            match = True
+        elif s.get("type") == "website" and s.get("name", "").lower() == target:
+            match = True
+        if match:
+            removed = sources["feed_sources"].pop(i)
+            _save_sources(path, sources)
+            label = removed.get("handle") or removed.get("name") or removed.get("url")
+            return True, f"Removed {label}"
+
+    return False, f"Not found: {target}"
+
+
+def _knowledge_add(body: dict) -> tuple[bool, str]:
+    key = re.sub(r'[^a-z0-9_-]', '', body.get("key", "").strip().lower().replace(" ", "_"))
+    name = body.get("name", "").strip()
+    handler = body.get("handler", "").strip().lower()
+    url = body.get("url", "").strip()
+    author = body.get("author", "").strip()
+
+    if not key or not handler or not url:
+        return False, "Key, handler, and feed URL are required"
+    if handler not in ("rss", "sitemap", "youtube", "podcast"):
+        return False, "Handler must be one of: rss, sitemap, youtube, podcast"
+
+    idx_file = _CFG["knowledge_dir"] / "index.md"
+    if not idx_file.exists():
+        return False, "knowledge/index.md not found"
+
+    content = idx_file.read_text(encoding="utf-8")
+    if re.search(rf'^\|\s*`?{re.escape(key)}`?\s*\|', content, re.MULTILINE):
+        return False, f"Key '{key}' already exists"
+
+    lines = content.splitlines()
+    last_table_line = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('|') and not re.match(r'^\s*\|[\s\-:|]+\|', line):
+            last_table_line = i
+
+    new_row = f"| {key} | {name} | {author} | {handler} | {url} |"
+    if last_table_line >= 0:
+        lines.insert(last_table_line + 1, new_row)
+    else:
+        lines += ["", "## Added via Dashboard", "",
+                  "| Key | Source | Author | Handler | Feed URL |",
+                  "|-----|--------|--------|---------|----------|",
+                  new_row]
+
+    idx_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True, f"Added {name or key}"
+
+
+def _knowledge_remove(body: dict) -> tuple[bool, str]:
+    key = body.get("key", "").strip().lower()
+    if not key:
+        return False, "Key is required"
+
+    idx_file = _CFG["knowledge_dir"] / "index.md"
+    if not idx_file.exists():
+        return False, "knowledge/index.md not found"
+
+    content = idx_file.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    new_lines = [l for l in lines if not re.match(rf'^\|\s*`?{re.escape(key)}`?\s*\|', l)]
+    if len(new_lines) == len(lines):
+        return False, f"Key '{key}' not found"
+
+    idx_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return True, f"Removed {key}"
+
+
 # ── Knowledge index ──────────────────────────────────────────────────────────
 
 REQUIRED_COLS = {"key", "handler", "feed url"}
@@ -499,8 +643,66 @@ class Handler(BaseHTTPRequestHandler):
 
         self._not_found()
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_POST(self):
+        parts = self._path_parts()
+        if parts[0] != "api":
+            self._not_found()
+            return
+        route = "/".join(parts[1:])
+
+        length = int(self.headers.get("Content-Length", 0))
+        body_raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(body_raw)
+        except json.JSONDecodeError:
+            self._json({"error": "invalid JSON"}, 400)
+            return
+
+        if route == "sources/add":
+            ok, msg = _sources_add(body)
+            if ok:
+                _load_feed()
+            self._json({"ok": ok, "message": msg})
+            return
+
+        if route == "sources/remove":
+            ok, msg = _sources_remove(body)
+            if ok:
+                _load_feed()
+            self._json({"ok": ok, "message": msg})
+            return
+
+        if route == "knowledge/sources/add":
+            ok, msg = _knowledge_add(body)
+            if ok:
+                _reload_knowledge()
+            self._json({"ok": ok, "message": msg})
+            return
+
+        if route == "knowledge/sources/remove":
+            ok, msg = _knowledge_remove(body)
+            if ok:
+                _reload_knowledge(rebuild_index=False)
+            self._json({"ok": ok, "message": msg})
+            return
+
+        self._not_found()
+
 
 # ── Startup ──────────────────────────────────────────────────────────────────
+
+def _reload_knowledge(rebuild_index: bool = True):
+    global _knowledge_sources, _knowledge_index
+    _knowledge_sources = _parse_knowledge_index_md()
+    _knowledge_index = _build_knowledge_index(force=rebuild_index)
+
 
 def _startup(rebuild_index: bool = False):
     global _knowledge_sources, _knowledge_index
