@@ -9,6 +9,7 @@ Video list resolution order:
 """
 
 import json
+import re
 import subprocess
 import time
 import feedparser
@@ -77,6 +78,50 @@ def _fetch_video_list_via_ytdlp(channel_ref: str, max_videos: int = 50) -> list[
         return []
 
 
+_STAGE_CUE_RE = re.compile(
+    r"\s*\[(?:music|applause|laughter|inaudible|silence|noise|sound effects?|cheering|crosstalk)[^\]]*\]\s*",
+    re.IGNORECASE,
+)
+_SENTENCE_RE = re.compile(r"[^.!?…]+[.!?…]+[\"')\]]*\s*")
+_SENTENCES_PER_PARA = 4
+
+
+def reflow_transcript_text(text: str) -> str:
+    """Reflow already-joined transcript text into readable paragraphs.
+
+    Strips stage cues like [music], collapses whitespace, and groups sentences
+    into ~4-sentence paragraphs separated by blank lines. Idempotent.
+    """
+    text = _STAGE_CUE_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    sentences = _SENTENCE_RE.findall(text)
+    if not sentences:
+        return text
+    paragraphs = []
+    for i in range(0, len(sentences), _SENTENCES_PER_PARA):
+        chunk = "".join(sentences[i : i + _SENTENCES_PER_PARA]).strip()
+        if chunk:
+            paragraphs.append(chunk)
+    consumed = "".join(sentences)
+    tail = text[len(consumed):].strip()
+    if tail:
+        paragraphs.append(tail)
+    return "\n\n".join(paragraphs)
+
+
+def _format_transcript(raw: list) -> str:
+    """Join short auto-caption segments into readable, paragraph-grouped prose.
+
+    YouTube auto-captions arrive as short fragments (~6-8 words). Joining with
+    newlines produces a wall of truncated lines. Instead: join with spaces,
+    then reflow.
+    """
+    text = " ".join(seg["text"].strip() for seg in raw if seg.get("text"))
+    return reflow_transcript_text(text)
+
+
 def _fetch_transcript(video_id: str) -> str:
     """Return plain-text transcript or empty string on failure."""
     if _YT_API is None:
@@ -84,7 +129,7 @@ def _fetch_transcript(video_id: str) -> str:
     try:
         t = _YT_API.fetch(video_id)
         raw = t.to_raw_data()
-        return "\n".join(seg["text"].strip() for seg in raw if seg.get("text"))
+        return _format_transcript(raw)
     except Exception as e:
         print(f"     ! transcript unavailable: {e}")
         return ""

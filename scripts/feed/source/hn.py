@@ -2,10 +2,11 @@
 """
 hn.py — Hacker News feed source via Algolia HN Search API.
 
-Fetches front page and Show HN stories with:
-  - Engagement filter (points > 2)
-  - Comment enrichment for top stories (parallel, top 5 by default)
-  - Deduplication by objectID
+Two-stage filter:
+  1. Cheap pre-filter — points >= HN_MIN_POINTS AND topic matches CONTENT.md
+  2. Cap survivors at HN_MAX_ITEMS, then fetch underlying article body via trafilatura
+
+Comment enrichment runs on the first ENRICH_LIMIT survivors.
 
 No API key needed — Algolia HN search is publicly accessible.
 
@@ -25,7 +26,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from typing import Any
 import urllib.request
 import urllib.error
@@ -37,6 +38,7 @@ from lib.atomic_io import atomic_write_json
 
 from config import load_config
 from feed.source.x import classify
+from feed.source.handlers.common import extract_article
 
 _CFG = load_config()
 
@@ -46,6 +48,78 @@ ALGOLIA_ITEM_URL = f"{ALGOLIA_BASE}/items"
 
 # Enrich top N stories with comments
 ENRICH_LIMIT = 5
+
+# Defaults for the viral+relevant pre-filter and article fetch.
+# Overridable via preferences.json → "hn" block.
+DEFAULT_MIN_POINTS = 30
+DEFAULT_MAX_ITEMS = 20
+DEFAULT_REQUIRE_TOPIC_MATCH = True
+DEFAULT_FETCH_ARTICLE_BODY = True
+ARTICLE_TEXT_MAX_CHARS = 5000
+ARTICLE_EXCERPT_CHARS = 280
+
+
+def _load_hn_prefs() -> dict:
+    """Load the 'hn' block from preferences.json with defaults."""
+    prefs_file = Path(_CFG["feed_assets"]) / "preferences.json"
+    hn_prefs: dict = {}
+    if prefs_file.exists():
+        try:
+            with open(prefs_file) as f:
+                hn_prefs = (json.load(f) or {}).get("hn", {}) or {}
+        except (json.JSONDecodeError, OSError):
+            hn_prefs = {}
+    return {
+        "min_points": int(hn_prefs.get("min_points", DEFAULT_MIN_POINTS)),
+        "max_items_per_run": int(hn_prefs.get("max_items_per_run", DEFAULT_MAX_ITEMS)),
+        "require_topic_match": bool(hn_prefs.get("require_topic_match", DEFAULT_REQUIRE_TOPIC_MATCH)),
+        "fetch_article_body": bool(hn_prefs.get("fetch_article_body", DEFAULT_FETCH_ARTICLE_BODY)),
+    }
+
+
+def _is_hn_self_url(url: str) -> bool:
+    """True if the URL points to HN itself (Show HN / Ask HN with no external link)."""
+    try:
+        host = urlparse(url).hostname or ""
+    except ValueError:
+        return False
+    return host.endswith("ycombinator.com")
+
+
+def _fetch_article_body(item: dict) -> tuple[str | None, str | None]:
+    """Return (article_text, article_excerpt) for an item, or (None, None) on failure."""
+    url = item.get("url", "")
+    if not url or _is_hn_self_url(url):
+        return None, None
+    try:
+        text = extract_article(url, source_key="hn", download_images=False)
+    except Exception:
+        return None, None
+    if not text:
+        return None, None
+    truncated = text[:ARTICLE_TEXT_MAX_CHARS]
+    excerpt_src = re.sub(r"\s+", " ", text).strip()
+    excerpt = excerpt_src[:ARTICLE_EXCERPT_CHARS].rstrip()
+    if len(excerpt_src) > ARTICLE_EXCERPT_CHARS:
+        excerpt += "…"
+    return truncated, excerpt
+
+
+def enrich_with_articles(items: list[dict], max_workers: int = 5) -> list[dict]:
+    """Fetch underlying article body for each item in parallel."""
+    if not items:
+        return items
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_article_body, item): idx for idx, item in enumerate(items)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                text, excerpt = future.result(timeout=30)
+            except Exception:
+                text, excerpt = None, None
+            items[idx]["article_text"] = text
+            items[idx]["article_excerpt"] = excerpt
+    return items
 
 
 def _get(url: str, timeout: int = 15) -> dict:
@@ -60,13 +134,13 @@ def _strip_html(text: str) -> str:
     return text.strip()
 
 
-def fetch_algolia(tag: str, hits_per_page: int = 30, days_back: int = 7) -> list[dict]:
-    """Fetch stories from Algolia, filtered by date and minimum engagement (points > 2)."""
+def fetch_algolia(tag: str, hits_per_page: int = 30, days_back: int = 7, min_points: int = DEFAULT_MIN_POINTS) -> list[dict]:
+    """Fetch stories from Algolia, filtered by date and minimum engagement (points >= min_points)."""
     since = int(time.time()) - (days_back * 86400)
     params = {
         "tags": tag,
         "hitsPerPage": hits_per_page,
-        "numericFilters": f"created_at_i>{since},points>2",
+        "numericFilters": f"created_at_i>{since},points>={min_points}",
     }
     url = f"{ALGOLIA_SEARCH_URL}?{urlencode(params)}"
     try:
@@ -77,7 +151,7 @@ def fetch_algolia(tag: str, hits_per_page: int = 30, days_back: int = 7) -> list
         try:
             hits = _get(fallback_url).get("hits", [])
             cutoff = int(time.time()) - (days_back * 86400)
-            return [h for h in hits if h.get("created_at_i", 0) > cutoff and (h.get("points") or 0) > 2]
+            return [h for h in hits if h.get("created_at_i", 0) > cutoff and (h.get("points") or 0) >= min_points]
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
             print(f"[hn] Error fetching {tag}: {exc}", file=sys.stderr)
             return []
@@ -175,21 +249,29 @@ def parse_story(hit: dict, story_type: str) -> dict | None:
         "object_id": object_id,
         "top_comments": [],
         "comment_insights": [],
+        "article_text": None,
+        "article_excerpt": None,
     }
 
 
 def fetch_hn(story_type: str = "both", hits_per_page: int = 30, days_back: int = 7) -> list[dict]:
-    """Fetch HN stories, enrich top stories with comments, return sorted by points."""
+    """Fetch HN stories, apply viral+relevant pre-filter, then enrich survivors with article body and comments."""
+    hn_prefs = _load_hn_prefs()
+    min_points = hn_prefs["min_points"]
+    max_items = hn_prefs["max_items_per_run"]
+    require_topic_match = hn_prefs["require_topic_match"]
+    fetch_articles = hn_prefs["fetch_article_body"]
+
     items: list[dict] = []
 
     if story_type in ("front_page", "both"):
-        for hit in fetch_algolia("front_page", hits_per_page, days_back):
+        for hit in fetch_algolia("front_page", hits_per_page, days_back, min_points):
             item = parse_story(hit, "front_page")
             if item:
                 items.append(item)
 
     if story_type in ("show_hn", "both"):
-        for hit in fetch_algolia("show_hn", hits_per_page, days_back):
+        for hit in fetch_algolia("show_hn", hits_per_page, days_back, min_points):
             item = parse_story(hit, "show_hn")
             if item:
                 items.append(item)
@@ -203,7 +285,27 @@ def fetch_hn(story_type: str = "both", hits_per_page: int = 30, days_back: int =
             seen.add(oid)
             unique.append(item)
 
+    pre_filter_count = len(unique)
+
+    # Stage 1b: relevance gate — drop items with no topic match against CONTENT.md.
+    # Show HN posts may have empty title classifications; keep them if their story body
+    # (already classified into post["topics"]) hits a pillar.
+    if require_topic_match:
+        unique = [item for item in unique if item.get("topics")]
+
+    # Sort by points and cap
     unique.sort(key=lambda x: x.get("likes", 0) or 0, reverse=True)
+    unique = unique[:max_items]
+
+    print(
+        f"[hn] Pre-filter: {pre_filter_count} → {len(unique)} survivors "
+        f"(min_points={min_points}, require_topic_match={require_topic_match}, cap={max_items})",
+        file=sys.stderr,
+    )
+
+    # Stage 2: fetch underlying article body for each survivor
+    if fetch_articles:
+        unique = enrich_with_articles(unique)
 
     # Enrich top stories with comments
     unique = enrich_top_stories(unique)

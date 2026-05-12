@@ -208,6 +208,12 @@ def _format_post_lines(counter: int, p: dict) -> list[str]:
         lines.append(f"{counter}. {icon} {source_name}: {title}")
         if snippet:
             lines.append(f"   {snippet}")
+    elif p.get("source") == "hn":
+        title = truncate(p.get("title", "") or p.get("content", ""), 110)
+        excerpt = p.get("article_excerpt") or ""
+        lines.append(f"{counter}. {author}: {title}")
+        if excerpt:
+            lines.append(f"   {truncate(excerpt)}")
     else:
         text = truncate(p.get("content", "") or p.get("title", ""))
         lines.append(f"{counter}. {author}: {text}")

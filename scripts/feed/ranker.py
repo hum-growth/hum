@@ -23,7 +23,7 @@ ASSETS_DIR = str(_CFG["feed_assets"])
 PREFS_FILE = os.path.join(ASSETS_DIR, "preferences.json")
 FEED_SOURCE_CONFIG_FILE = str(_CFG["feed_dir"] / "feed_source_config.json")
 
-DEFAULT_SOURCE_WEIGHTS = {"hn": 0.5, "x": 1.0, "knowledge": 10.0, "youtube": 1.0}
+DEFAULT_SOURCE_WEIGHTS = {"hn": 1.0, "x": 1.0, "knowledge": 10.0, "youtube": 1.0}
 
 def load_json(path, default):
     if os.path.exists(path):
@@ -52,6 +52,10 @@ def score_post(post: dict, prefs: dict, feed_config: dict | None = None, blockli
     author = post.get("author", "")
     topics = post.get("topics", [])
     text = post.get("content", "") or post.get("title", "")
+    # Include the underlying article body for keyword matching when available
+    # (HN crawler fetches it via trafilatura for survivors of the viral+relevant pre-filter).
+    article_text = post.get("article_text") or ""
+    keyword_text = f"{text}\n{article_text}" if article_text else text
     likes = parse_likes(post.get("likes", 0))
     if post.get("source") == "youtube":
         likes = int(post.get("views", likes) or likes)
@@ -76,7 +80,7 @@ def score_post(post: dict, prefs: dict, feed_config: dict | None = None, blockli
     topic_w = sum(topic_weights) / len(topic_weights)
 
     # Keyword weight: average of matching keywords in preferences
-    keywords = extract_keywords(text)
+    keywords = extract_keywords(keyword_text)
     kw_scores = [prefs["keywords"].get(kw, 1.0) for kw in keywords]
     kw_w = sum(kw_scores) / len(kw_scores) if kw_scores else 1.0
 
